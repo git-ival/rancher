@@ -28,7 +28,7 @@ func CreateEC2Instances(s *ProvisioningTestSuite) {
 	s.ec2Client = newClient
 	require.NoError(s.T(), err)
 
-	s.nodes, err = s.ec2Client.CreateNodes(ec2NodeName, true, s.node_config.NumNodes)
+	s.nodes, err = s.ec2Client.CreateNodes(ec2NodeName, true, s.nodeConfig.NumNodes)
 	require.NoError(s.T(), err)
 	s.T().Log("Successfully created EC2 Instances")
 }
@@ -88,7 +88,7 @@ func ProvisionClusters(s *ProvisioningTestSuite) {
 
 	for key, node := range s.nodes {
 		s.T().Logf("Execute Registration Command for node %s", node.NodeID)
-		command := fmt.Sprintf("%s %s", token.InsecureNodeCommand, s.node_config.Roles[key])
+		command := fmt.Sprintf("%s %s", token.InsecureNodeCommand, s.nodeConfig.Roles[key])
 
 		err = node.ExecuteCommand(command)
 		require.NoError(s.T(), err)
@@ -108,13 +108,13 @@ type ProvisioningTestSuite struct {
 	suite.Suite
 
 	// server config
-	host           string
-	password       string
-	adminToken     string
-	userToken      string
-	cni            string
-	k8sVersion     string
-	roles_per_node string
+	host         string
+	password     string
+	adminToken   string
+	userToken    string
+	cni          string
+	k8sVersion   string
+	rolesPerNode string
 
 	// AWS environment variables
 	awsInstanceType    string
@@ -133,7 +133,8 @@ type ProvisioningTestSuite struct {
 
 	ec2Client        *aws.EC2Client
 	nodes            []*aws.EC2Node
-	node_roles       []string
+	nodeConfig       *cluster.NodeConfig
+	nodeRoles        []string
 	baseEC2Name      string
 	baseClusterName  string
 	clusterNamespace string
@@ -145,7 +146,6 @@ type ProvisioningTestSuite struct {
 
 	clusterNames []string
 	clusters     []*cluster.Cluster
-	node_config  *cluster.NodeConfig
 
 	rancherCleanup bool
 }
@@ -204,12 +204,13 @@ func (s *ProvisioningTestSuite) TestRKE2CustomCluster_CreateUser() {
 	userName := "automationuser"
 	displayName := "Automation User"
 	mustChangePassword := false
-	s.node_roles = []string{
+	s.nodeRoles = []string{
 		"--etcd",
 		"--controlplane",
 		"--worker",
 	}
-	s.node_config = cluster.NewNodeConfig("3 nodes - 1 role per node", 3, s.node_roles)
+
+	s.nodeConfig = cluster.NewNodeConfig("3 nodes - 1 role per node", 3, s.nodeRoles)
 	for s.bearerName, s.bearerToken = range clients.BearerTokensList() {
 		ProvisionClusters(s)
 	}
@@ -247,8 +248,8 @@ func (s *ProvisioningTestSuite) TestRKE2CustomCluster_TableDriven() {
 		// SetupTableTest(s)
 
 		for s.bearerName, s.bearerToken = range clients.BearerTokensList() {
-			s.node_config = cluster.NewNodeConfig(tt.Name+" "+s.bearerName, tt.NumNodes, tt.Roles)
-			s.Run(s.node_config.Name, func() {
+			s.nodeConfig = cluster.NewNodeConfig(tt.Name+" "+s.bearerName, tt.NumNodes, tt.Roles)
+			s.Run(s.nodeConfig.Name, func() {
 				ProvisionClusters(s)
 			})
 		}
