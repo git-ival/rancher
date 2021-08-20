@@ -9,7 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-var sshPath = os.Getenv("SSH_PATH")
+var SSHPath = os.Getenv("SSH_PATH")
 
 type EC2Node struct {
 	NodeName         string
@@ -66,6 +66,6 @@ func getSSHKey(sshKeyName string) ([]byte, error) {
 }
 
 func getSSHKeyPath(sshKeyname string) string {
-	keyPath := filepath.Join(sshPath, sshKeyname)
+	keyPath := filepath.Join(SSHPath, sshKeyname)
 	return keyPath
 }

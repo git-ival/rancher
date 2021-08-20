@@ -17,6 +17,20 @@ import (
 var CNI = environmentvariables.Getenv("CNI", "calico")
 var KubernetesVersion = environmentvariables.Getenv("KUBERNETES_VERSION", "v1.21.3-rc4+rke2r2")
 
+type NodeConfig struct {
+	Name     string
+	NumNodes int64
+	Roles    []string
+}
+
+func NewNodeConfig(name string, numNodes int64, roles []string) *NodeConfig {
+	return &NodeConfig{
+		Name:     name,
+		NumNodes: numNodes,
+		Roles:    roles,
+	}
+}
+
 type Cluster struct {
 	v1.ClusterInterface
 }

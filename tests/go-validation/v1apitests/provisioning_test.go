@@ -68,14 +68,14 @@ func TestProvisioning_RKE2CustomCluster(t *testing.T) {
 				newClient, err := aws.NewEC2Client()
 				require.NoError(t, err)
 
-				ec2NodeName := baseEC2Name + namegenerator.RandStringBytes(defaultRandStringLength)
+				ec2NodeName := baseEC2Name + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 				nodes, err := newClient.CreateNodes(ec2NodeName, true, tt.numNodes)
 				require.NoError(t, err)
 				t.Log("Successfully created EC2 Instances")
 
 				t.Log("Create Cluster")
 				//randomize name
-				clusterName := baseCustomClusterName + namegenerator.RandStringBytes(defaultRandStringLength)
+				clusterName := baseCustomClusterName + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 				clusterNames = append(clusterNames, clusterName)
 
 				provisioningClient, err := clients.NewProvisioningClient(bearerToken)
@@ -154,14 +154,14 @@ func TestProvisioning_RKE2CustomClusterDynamicInput(t *testing.T) {
 			require.NoError(t, err)
 
 			t.Log("Creating EC2 Instances")
-			ec2NodeName := baseEC2Name + namegenerator.RandStringBytes(defaultRandStringLength)
+			ec2NodeName := baseEC2Name + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 			nodes, err := newClient.CreateNodes(ec2NodeName, true, int64(numNodes))
 			require.NoError(t, err)
 			t.Log("Successfully created EC2 Instances")
 
 			t.Log("Create Cluster")
 			//randomize name
-			clusterName := baseCustomClusterName + namegenerator.RandStringBytes(defaultRandStringLength)
+			clusterName := baseCustomClusterName + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 			clusterNames = append(clusterNames, clusterName)
 
 			provisioningClient, err := clients.NewProvisioningClient(bearerToken)
@@ -233,7 +233,7 @@ func TestProvisioning_RKE2DigitalOceanCluster(t *testing.T) {
 				return nil, "", nil, nil, err
 			}
 
-			cloudCredentialName := digitalOceanCloudCredentialName + namegenerator.RandStringBytes(defaultRandStringLength)
+			cloudCredentialName := digitalOceanCloudCredentialName + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 			doCloudCred := cloudcredentials.NewCloudCredentialSecret(cloudCredentialName, "", "digitalocean", namespace)
 
 			cloudCredential := cloudcredentials.NewCloudCredential(client)
@@ -318,7 +318,7 @@ func TestProvisioning_RKE2DigitalOceanCluster(t *testing.T) {
 					t.Fatalf("Setup has failed with error: %v", setupErr)
 				}
 				//randomize name
-				clusterName := baseDOClusterName + namegenerator.RandStringBytes(defaultRandStringLength)
+				clusterName := baseDOClusterName + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 				clusterNames = append(clusterNames, clusterName)
 
 				provisioningClient, err := clients.NewProvisioningClient(bearerToken)
@@ -376,7 +376,7 @@ func TestProvisioning_RKE2DigitalOceanClusterDynamicInput(t *testing.T) {
 			client, err := clients.NewCoreV1Client(bearerToken)
 			require.NoError(t, err)
 
-			cloudCredentialName := digitalOceanCloudCredentialName + namegenerator.RandStringBytes(defaultRandStringLength)
+			cloudCredentialName := digitalOceanCloudCredentialName + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 			doCloudCred := cloudcredentials.NewCloudCredentialSecret(cloudCredentialName, "", "digitalocean", namespace)
 
 			cloudCredential := cloudcredentials.NewCloudCredential(client)
@@ -414,7 +414,7 @@ func TestProvisioning_RKE2DigitalOceanClusterDynamicInput(t *testing.T) {
 			var clusters []*cluster.Cluster
 
 			//randomize name
-			clusterName := baseDOClusterName + namegenerator.RandStringBytes(defaultRandStringLength)
+			clusterName := baseDOClusterName + namegenerator.RandStringLowerBytes(defaultRandStringLength)
 			clusterNames = append(clusterNames, clusterName)
 
 			provisioningClient, err := clients.NewProvisioningClient(bearerToken)

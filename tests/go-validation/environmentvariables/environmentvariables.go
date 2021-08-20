@@ -29,3 +29,16 @@ func ConvertStringToInt(inputString string) int {
 	}
 	return stringInt
 }
+
+func StringIsEmpty(s string) bool {
+	return s == ""
+}
+
+func StringArrayIsEmpty(ss []string) bool {
+	for _, s := range ss {
+		if s == "" {
+			return true
+		}
+	}
+	return false
+}

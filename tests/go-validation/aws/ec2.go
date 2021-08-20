@@ -10,28 +10,28 @@ import (
 	"github.com/rancher/rancher/tests/go-validation/environmentvariables"
 )
 
-var awsInstanceType = environmentvariables.Getenv("AWS_INSTANCE_TYPE", "t3a.medium")
-var awsRegion = environmentvariables.Getenv("AWS_REGION", "us-east-2")
-var awsRegionAZ = environmentvariables.Getenv("AWS_REGION_AZ", "us-east-2a")
-var awsAMI = environmentvariables.Getenv("AWS_AMI", "ami-0d5d9d301c853a04a")
-var awsSecurityGroup = environmentvariables.Getenv("AWS_SECURITY_GROUPS", "sg-0e753fd5550206e55")
-var awsAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
-var awsSecretAccessKey = environmentvariables.Getenv("AWS_SECRET_ACCESS_KEY", "jenkins-rke-validation.pem")
-var awsSSHKeyName = os.Getenv("AWS_SSH_KEY_NAME")
-var awsCICDInstanceTag = environmentvariables.Getenv("AWS_CICD_INSTANCE_TAG", "rancher-validation")
-var awsIAMProfile = environmentvariables.Getenv("AWS_IAM_PROFILE", "")
-var awsUser = environmentvariables.Getenv("AWS_USER", "ubuntu")
-var awsVolumeSize = environmentvariables.ConvertStringToInt(environmentvariables.Getenv("AWS_VOLUME_SIZE", "50"))
+var AWSInstanceType string = environmentvariables.Getenv("AWS_INSTANCE_TYPE", "t3a.medium")
+var AWSRegion = environmentvariables.Getenv("AWS_REGION", "us-east-2")
+var AWSRegionAZ = environmentvariables.Getenv("AWS_REGION_AZ", "")
+var AWSAMI = environmentvariables.Getenv("AWS_AMI", "ami-0d5d9d301c853a04a")
+var AWSSecurityGroup = environmentvariables.Getenv("AWS_SECURITY_GROUPS", "sg-0e753fd5550206e55")
+var AWSAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+var AWSSecretAccessKey = environmentvariables.Getenv("AWS_SECRET_ACCESS_KEY", "jenkins-rke-validation.pem")
+var AWSSSHKeyName = os.Getenv("AWS_SSH_KEY_NAME")
+var AWSCICDInstanceTag = environmentvariables.Getenv("AWS_CICD_INSTANCE_TAG", "rancher-validation")
+var AWSIAMProfile = environmentvariables.Getenv("AWS_IAM_PROFILE", "")
+var AWSUser = environmentvariables.Getenv("AWS_USER", "ubuntu")
+var AWSVolumeSize = environmentvariables.ConvertStringToInt(environmentvariables.Getenv("AWS_VOLUME_SIZE", "50"))
 
 type EC2Client struct {
 	svc *ec2.EC2
 }
 
 func NewEC2Client() (*EC2Client, error) {
-	credential := credentials.NewStaticCredentials(awsAccessKeyID, awsSecretAccessKey, "")
+	credential := credentials.NewStaticCredentials(AWSAccessKeyID, AWSSecretAccessKey, "")
 	sess, err := session.NewSession(&aws.Config{
 		Credentials: credential,
-		Region:      aws.String(awsRegion)},
+		Region:      aws.String(AWSRegion)},
 	)
 	if err != nil {
 		return nil, err
@@ -45,11 +45,11 @@ func NewEC2Client() (*EC2Client, error) {
 }
 
 func (e *EC2Client) CreateNodes(nodeNameBase string, publicIp bool, numOfInstancs int64) ([]*EC2Node, error) {
-	sshName := getSSHKeyName(awsSSHKeyName)
+	sshName := getSSHKeyName(AWSSSHKeyName)
 
 	runInstancesInput := &ec2.RunInstancesInput{
-		ImageId:      aws.String(awsAMI),
-		InstanceType: aws.String(awsInstanceType),
+		ImageId:      aws.String(AWSAMI),
+		InstanceType: aws.String(AWSInstanceType),
 		MinCount:     aws.Int64(numOfInstancs),
 		MaxCount:     aws.Int64(numOfInstancs),
 		KeyName:      aws.String(sshName),
@@ -57,21 +57,21 @@ func (e *EC2Client) CreateNodes(nodeNameBase string, publicIp bool, numOfInstanc
 			&ec2.BlockDeviceMapping{
 				DeviceName: aws.String("/dev/sda1"),
 				Ebs: &ec2.EbsBlockDevice{
-					VolumeSize: aws.Int64(int64(awsVolumeSize)),
+					VolumeSize: aws.Int64(int64(AWSVolumeSize)),
 				},
 			},
 		},
 		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-			Name: aws.String(awsIAMProfile),
+			Name: aws.String(AWSIAMProfile),
 		},
 		Placement: &ec2.Placement{
-			AvailabilityZone: aws.String(awsRegionAZ),
+			AvailabilityZone: aws.String(AWSRegionAZ),
 		},
 		NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{
 			&ec2.InstanceNetworkInterfaceSpecification{
 				DeviceIndex:              aws.Int64(0),
 				AssociatePublicIpAddress: aws.Bool(publicIp),
-				Groups:                   aws.StringSlice([]string{awsSecurityGroup}),
+				Groups:                   aws.StringSlice([]string{AWSSecurityGroup}),
 			},
 		},
 		TagSpecifications: []*ec2.TagSpecification{
@@ -84,7 +84,7 @@ func (e *EC2Client) CreateNodes(nodeNameBase string, publicIp bool, numOfInstanc
 					},
 					&ec2.Tag{
 						Key:   aws.String("CICD"),
-						Value: aws.String(awsCICDInstanceTag),
+						Value: aws.String(AWSCICDInstanceTag),
 					},
 				},
 			},
@@ -128,7 +128,7 @@ func (e *EC2Client) CreateNodes(nodeNameBase string, publicIp bool, numOfInstanc
 
 	readyInstances := describe.Reservations[0].Instances
 
-	sshKey, err := getSSHKey(awsSSHKeyName)
+	sshKey, err := getSSHKey(AWSSSHKeyName)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func (e *EC2Client) CreateNodes(nodeNameBase string, publicIp bool, numOfInstanc
 			NodeID:           *readyInstance.InstanceId,
 			PublicIPAdress:   *readyInstance.PublicIpAddress,
 			PrivateIPAddress: *readyInstance.PrivateIpAddress,
-			SSHUser:          awsUser,
+			SSHUser:          AWSUser,
 			SSHKey:           sshKey,
 		}
 		ec2Nodes = append(ec2Nodes, ec2Node)
