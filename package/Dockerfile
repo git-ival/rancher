@@ -1,8 +1,7 @@
 FROM registry.suse.com/suse/sle15:15.3
 
-RUN zypper -n install git-core curl ca-certificates unzip xz gzip sed tar shadow gawk && \
+RUN zypper -n install git-core curl ca-certificates unzip xz gzip sed tar shadow gawk vim && \
     zypper -n clean -a && rm -rf /tmp/* /var/tmp/* /usr/share/doc/packages/* && \
-    rpm -e libsolv-tools zypper libzypp container-suseconnect ; \
     useradd rancher && \
     mkdir -p /var/lib/rancher/etcd /var/lib/cattle /opt/jail /opt/drivers/management-state/bin && \
     chown -R rancher /var/lib/rancher /var/lib/cattle /usr/local/bin
@@ -28,19 +27,19 @@ ENV CATTLE_CHART_DEFAULT_BRANCH=$CHART_DEFAULT_BRANCH
 ENV CATTLE_PARTNER_CHART_DEFAULT_BRANCH=$PARTNER_CHART_DEFAULT_BRANCH
 ENV CATTLE_RKE2_CHART_DEFAULT_BRANCH=$RKE2_CHART_DEFAULT_BRANCH
 ENV CATTLE_HELM_VERSION v2.16.8-rancher1
-ENV CATTLE_K3S_VERSION v1.20.7+k3s1
-ENV CATTLE_MACHINE_VERSION v0.15.0-rancher60
+ENV CATTLE_K3S_VERSION v1.21.3+k3s1
+ENV CATTLE_MACHINE_VERSION v0.15.0-rancher68
 ENV CATTLE_MACHINE_PROVISION_IMAGE rancher/machine:${CATTLE_MACHINE_VERSION}
 ENV CATTLE_ETCD_VERSION v3.4.15
 ENV LOGLEVEL_VERSION v0.1.3
 ENV TINI_VERSION v0.18.0
-ENV TELEMETRY_VERSION v0.5.15
+ENV TELEMETRY_VERSION v0.5.16
 ENV DOCKER_MACHINE_LINODE_VERSION v0.1.8
 ENV LINODE_UI_DRIVER_VERSION v0.3.0
 ENV CATTLE_KDM_BRANCH ${CATTLE_KDM_BRANCH}
 ENV HELM_VERSION v3.6.0
 ENV KUSTOMIZE_VERSION v3.10.0
-ENV CATTLE_SYSTEM_AGENT_VERSION v0.0.1-alpha34
+ENV CATTLE_SYSTEM_AGENT_VERSION v0.0.1-alpha38
 ENV CATTLE_SYSTEM_AGENT_UPGRADE_IMAGE rancher/system-agent:${CATTLE_SYSTEM_AGENT_VERSION}-suc
 
 # System charts minimal version
@@ -106,7 +105,7 @@ RUN curl -sLf ${!TINI_URL} > /usr/bin/tini && \
     mkdir -p /var/lib/rancher-data/driver-metadata
 
 ENV CATTLE_UI_VERSION 2.5.2-rc8.1
-ENV CATTLE_DASHBOARD_UI_VERSION v2.5.2-rc5
+ENV CATTLE_DASHBOARD_UI_VERSION release-2.6
 ENV CATTLE_CLI_VERSION v2.4.12-rc2
 
 # Please update the api-ui-version in pkg/settings/settings.go when updating the version here.
@@ -138,7 +137,8 @@ RUN mkdir -p /usr/share/rancher/ui && \
     curl -sfL https://github.com/rancher/system-agent/releases/download/${CATTLE_SYSTEM_AGENT_VERSION}/rancher-system-agent-arm -O && \
     curl -sfL https://github.com/rancher/system-agent/releases/download/${CATTLE_SYSTEM_AGENT_VERSION}/rancher-system-agent-arm64 -O && \
     curl -sfL https://github.com/rancher/system-agent/releases/download/${CATTLE_SYSTEM_AGENT_VERSION}/rancher-system-agent-amd64 -O && \
-    curl -sfL https://github.com/rancher/system-agent/releases/download/${CATTLE_SYSTEM_AGENT_VERSION}/install.sh -o system-agent-install.sh
+    curl -sfL https://github.com/rancher/system-agent/releases/download/${CATTLE_SYSTEM_AGENT_VERSION}/install.sh -o system-agent-install.sh && \
+    curl -sfL https://raw.githubusercontent.com/rancher/rke2/master/windows/rke2-install.ps1 -o rke2-install.ps1
 
 ENV CATTLE_CLI_URL_DARWIN  https://releases.rancher.com/cli2/${CATTLE_CLI_VERSION}/rancher-darwin-amd64-${CATTLE_CLI_VERSION}.tar.gz
 ENV CATTLE_CLI_URL_LINUX   https://releases.rancher.com/cli2/${CATTLE_CLI_VERSION}/rancher-linux-amd64-${CATTLE_CLI_VERSION}.tar.gz

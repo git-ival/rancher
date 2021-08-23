@@ -120,10 +120,8 @@ func (in *ClusterSpec) DeepCopyInto(out *ClusterSpec) {
 	}
 	if in.AgentEnvVars != nil {
 		in, out := &in.AgentEnvVars, &out.AgentEnvVars
-		*out = make([]corev1.EnvVar, len(*in))
-		for i := range *in {
-			(*in)[i].DeepCopyInto(&(*out)[i])
-		}
+		*out = make([]rkecattleiov1.EnvVar, len(*in))
+		copy(*out, *in)
 	}
 	if in.EnableNetworkPolicy != nil {
 		in, out := &in.EnableNetworkPolicy, &out.EnableNetworkPolicy
@@ -198,7 +196,7 @@ func (in *RKEConfig) DeepCopyInto(out *RKEConfig) {
 	}
 	if in.ETCDSnapshotRestore != nil {
 		in, out := &in.ETCDSnapshotRestore, &out.ETCDSnapshotRestore
-		*out = new(rkecattleiov1.ETCDSnapshot)
+		*out = new(rkecattleiov1.ETCDSnapshotRestore)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.MachinePools != nil {

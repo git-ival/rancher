@@ -15,7 +15,7 @@ var AWSRegion = environmentvariables.Getenv("AWS_REGION", "us-east-2")
 var AWSRegionAZ = environmentvariables.Getenv("AWS_REGION_AZ", "")
 var AWSAMI = environmentvariables.Getenv("AWS_AMI", "ami-0d5d9d301c853a04a")
 var AWSSecurityGroup = environmentvariables.Getenv("AWS_SECURITY_GROUPS", "sg-0e753fd5550206e55")
-var AWSAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+var awsAccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
 var AWSSecretAccessKey = environmentvariables.Getenv("AWS_SECRET_ACCESS_KEY", "jenkins-rke-validation.pem")
 var AWSSSHKeyName = os.Getenv("AWS_SSH_KEY_NAME")
 var AWSCICDInstanceTag = environmentvariables.Getenv("AWS_CICD_INSTANCE_TAG", "rancher-validation")
@@ -28,7 +28,7 @@ type EC2Client struct {
 }
 
 func NewEC2Client() (*EC2Client, error) {
-	credential := credentials.NewStaticCredentials(AWSAccessKeyID, AWSSecretAccessKey, "")
+	credential := credentials.NewStaticCredentials(awsAccessKeyID, AWSSecretAccessKey, "")
 	sess, err := session.NewSession(&aws.Config{
 		Credentials: credential,
 		Region:      aws.String(AWSRegion)},

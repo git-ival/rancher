@@ -7,10 +7,15 @@ assignees: ''
 
 ---
 
+<!--If this is a UI issue, please file an issue at https://github.com/rancher/dashboard/ -->
+
 **Rancher Server Setup**
 - Rancher version:
 - Installation option (Docker install/Helm Chart):
-   - If Helm Chart, Kubernetes Cluster and version (RKE1, RKE2, k3s, EKS, etc):
+   - If Helm Chart, Kubernetes Info:
+         Cluster Type (RKE1, RKE2, k3s, EKS, etc):
+         Node Setup:
+         Version:
 - Proxy/Cert Details:
 
 **Information about the Cluster**
@@ -39,4 +44,4 @@ assignees: ''
 <!-- If applicable, add screenshots to help explain your problem.-->
 
 **Additional context**
-<!--Add any other context about the problem here.—>
+<!--Add any other context about the problem here.-->

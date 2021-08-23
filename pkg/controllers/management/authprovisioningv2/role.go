@@ -7,6 +7,7 @@ import (
 
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	"github.com/rancher/rancher/pkg/rbac"
 	apiextcontrollers "github.com/rancher/wrangler/pkg/generated/controllers/apiextensions.k8s.io/v1"
 	"github.com/rancher/wrangler/pkg/name"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -100,18 +101,21 @@ func (h *handler) OnClusterObjectChanged(obj runtime.Object) (runtime.Object, er
 	if err != nil {
 		return nil, err
 	}
-	meta, err := meta.Accessor(obj)
+	objMeta, err := meta.Accessor(obj)
 	if err != nil {
 		return nil, err
 	}
 	for _, clusterName := range clusterNames {
-		h.roleTemplateController.Enqueue(fmt.Sprintf("cluster/%s/%s", meta.GetNamespace(), clusterName))
+		h.roleTemplateController.Enqueue(fmt.Sprintf("cluster/%s/%s", objMeta.GetNamespace(), clusterName))
 	}
 	return obj, nil
 }
 
 func (h *handler) OnChange(key string, rt *v3.RoleTemplate) (*v3.RoleTemplate, error) {
 	if rt != nil {
+		if rt.DeletionTimestamp != nil {
+			return rt, nil
+		}
 		return rt, h.objects(rt, true, nil)
 	}
 
@@ -129,7 +133,7 @@ func (h *handler) OnChange(key string, rt *v3.RoleTemplate) (*v3.RoleTemplate, e
 			return rt, err
 		}
 
-		rts, err := h.roleTemplates.List(labels.Everything())
+		rts, err := h.roleTemplatesCache.List(labels.Everything())
 		if err != nil {
 			return rt, err
 		}
@@ -152,7 +156,12 @@ func (h *handler) objects(rt *v3.RoleTemplate, enqueue bool, cluster *v1.Cluster
 		return nil
 	}
 
-	for _, rule := range rt.Rules {
+	rules, err := rbac.RulesFromTemplate(h.clusterRoleCache, h.roleTemplatesCache, rt)
+	if err != nil {
+		return err
+	}
+
+	for _, rule := range rules {
 		if len(rule.NonResourceURLs) > 0 || len(rule.ResourceNames) > 0 {
 			continue
 		}
@@ -207,18 +216,18 @@ func (h *handler) objects(rt *v3.RoleTemplate, enqueue bool, cluster *v1.Cluster
 	return nil
 }
 
-func (h *handler) getResourceNames(rt *v3.RoleTemplate, resourceMatch resourceMatch, cluster *v1.Cluster) ([]string, error) {
+func (h *handler) getResourceNames(resourceMatch resourceMatch, cluster *v1.Cluster) ([]string, error) {
 	objs, err := h.dynamic.GetByIndex(resourceMatch.GVK, clusterIndexed, fmt.Sprintf("%s/%s", cluster.Namespace, cluster.Name))
 	if err != nil {
 		return nil, err
 	}
 	result := make([]string, 0, len(objs))
 	for _, obj := range objs {
-		meta, err := meta.Accessor(obj)
+		objMeta, err := meta.Accessor(obj)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, meta.GetName())
+		result = append(result, objMeta.GetName())
 	}
 	return result, nil
 }
@@ -236,11 +245,19 @@ func (h *handler) createRoleForCluster(rt *v3.RoleTemplate, matches []match, clu
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      roleTemplateRoleName(rt.Name, cluster.Name),
 			Namespace: cluster.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: cluster.APIVersion,
+					Kind:       cluster.Kind,
+					Name:       cluster.Name,
+					UID:        cluster.UID,
+				},
+			},
 		},
 	}
 
 	for _, match := range matches {
-		names, err := h.getResourceNames(rt, match.Match, cluster)
+		names, err := h.getResourceNames(match.Match, cluster)
 		if err != nil {
 			return err
 		}
@@ -257,9 +274,8 @@ func (h *handler) createRoleForCluster(rt *v3.RoleTemplate, matches []match, clu
 
 	return h.apply.
 		WithListerNamespace(role.Namespace).
-		WithSetID(cluster.Name).
+		WithSetID("auth-prov-v2-roletemplate" + "-" + cluster.Name).
 		WithOwner(rt).
-		WithSetOwnerReference(true, true).
 		ApplyObjects(&role)
 }
 

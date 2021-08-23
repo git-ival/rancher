@@ -20,6 +20,8 @@ var (
 	InjectDefaults string
 
 	AgentImage                        = NewSetting("agent-image", "rancher/rancher-agent:master-head")
+	AgentRolloutTimeout               = NewSetting("agent-rollout-timeout", "300s")
+	AgentRolloutWait                  = NewSetting("agent-rollout-wait", "true")
 	AuthImage                         = NewSetting("auth-image", v32.ToolsSystemImages.AuthSystemImages.KubeAPIAuth)
 	AuthTokenMaxTTLMinutes            = NewSetting("auth-token-max-ttl-minutes", "0") // never expire
 	AuthorizationCacheTTLSeconds      = NewSetting("authorization-cache-ttl-seconds", "10")
@@ -39,7 +41,7 @@ var (
 	GithubProxyAPIURL                 = NewSetting("github-proxy-api-url", "https://api.github.com")
 	HelmVersion                       = NewSetting("helm-version", "dev")
 	HelmMaxHistory                    = NewSetting("helm-max-history", "10")
-	IngressIPDomain                   = NewSetting("ingress-ip-domain", "xip.io")
+	IngressIPDomain                   = NewSetting("ingress-ip-domain", "sslip.io")
 	InstallUUID                       = NewSetting("install-uuid", "")
 	InternalServerURL                 = NewSetting("internal-server-url", "")
 	InternalCACerts                   = NewSetting("internal-cacerts", "")
@@ -62,13 +64,13 @@ var (
 	ServerURL                         = NewSetting("server-url", "")
 	ServerVersion                     = NewSetting("server-version", "dev")
 	SystemAgentVersion                = NewSetting("system-agent-version", "")
-	SystemAgentInstallScript          = NewSetting("system-agent-install-script", "")
+	SystemAgentInstallScript          = NewSetting("system-agent-install-script", "https://raw.githubusercontent.com/rancher/system-agent/main/install.sh")
+	WindowsRke2InstallScript          = NewSetting("windows-rke2-install-script", "https://raw.githubusercontent.com/rancher/rke2/master/windows/rke2-install.ps1")
 	SystemAgentInstallerImage         = NewSetting("system-agent-installer-image", "docker.io/rancher/system-agent-installer-")
 	SystemAgentUpgradeImage           = NewSetting("system-agent-upgrade-image", "")
 	SystemDefaultRegistry             = NewSetting("system-default-registry", "")
-	SystemNamespaces                  = NewSetting("system-namespaces", "kube-system,kube-public,cattle-system,cattle-alerting,cattle-logging,cattle-pipeline,cattle-prometheus,ingress-nginx,cattle-global-data,cattle-istio,kube-node-lease,cert-manager,cattle-global-nt,security-scan,cattle-fleet-system,calico-system,tigera-operator")
+	SystemNamespaces                  = NewSetting("system-namespaces", "kube-system,kube-public,cattle-system,cattle-alerting,cattle-logging,cattle-pipeline,cattle-prometheus,ingress-nginx,cattle-global-data,cattle-istio,kube-node-lease,cert-manager,cattle-global-nt,security-scan,cattle-fleet-system,calico-system,tigera-operator,cattle-impersonation-system")
 	TelemetryOpt                      = NewSetting("telemetry-opt", "")
-	TokenHashing                      = NewSetting("token-hashing", "true")
 	TLSMinVersion                     = NewSetting("tls-min-version", "1.2")
 	TLSCiphers                        = NewSetting("tls-ciphers", "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305")
 	UIBanners                         = NewSetting("ui-banners", "{}")
@@ -100,7 +102,7 @@ var (
 	PartnerChartDefaultBranch         = NewSetting("partner-chart-default-branch", "main")
 	RKE2ChartDefaultBranch            = NewSetting("rke2-chart-default-branch", "main")
 	FleetDefaultWorkspaceName         = NewSetting("fleet-default-workspace-name", "fleet-default") // fleetWorkspaceName to assign to clusters with none
-	ShellImage                        = NewSetting("shell-image", "rancher/shell:v0.1.8")
+	ShellImage                        = NewSetting("shell-image", "rancher/shell:v0.1.10")
 	IgnoreNodeName                    = NewSetting("ignore-node-name", "") // nodes to ignore when syncing v1.node to v3.node
 	NoDefaultAdmin                    = NewSetting("no-default-admin", "")
 	RestrictedDefaultAdmin            = NewSetting("restricted-default-admin", "false") // When bootstrapping the admin for the first time, give them the global role restricted-admin
@@ -109,7 +111,8 @@ var (
 	EKSUpstreamRefresh                = NewSetting("eks-refresh", "300")
 	GKEUpstreamRefresh                = NewSetting("gke-refresh", "300")
 	HideLocalCluster                  = NewSetting("hide-local-cluster", "false")
-	MachineProvisionImage             = NewSetting("machine-provision-image", "rancher/machine:v0.15.0-rancher60")
+	MachineProvisionImage             = NewSetting("machine-provision-image", "rancher/machine:v0.15.0-rancher68")
+	SystemFeatureChartRefreshSeconds  = NewSetting("system-feature-chart-refresh-seconds", "900")
 
 	FleetMinVersion          = NewSetting("fleet-min-version", "")
 	RancherWebhookMinVersion = NewSetting("rancher-webhook-min-version", "")

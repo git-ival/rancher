@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/rancher/lasso/pkg/dynamic"
 	"github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1/plan"
@@ -31,7 +32,8 @@ import (
 )
 
 const (
-	Provisioned = condition.Cond("Provisioned")
+	Provisioned         = condition.Cond("Provisioned")
+	InfrastructureReady = condition.Cond(capi.InfrastructureReadyCondition)
 )
 
 type handler struct {
@@ -162,6 +164,15 @@ func (h *handler) OnChange(key string, machine *capi.Machine) (*capi.Machine, er
 		return machine, nil
 	}
 
+	status, reason, message, providerID, err := h.getInfraMachineState(machine)
+	if machine.DeletionTimestamp != nil && apierror.IsNotFound(err) {
+		// If the machine is being deleted and the infrastructure machine object is not found,
+		// then update the status of the machine object so the CAPI controller picks it up.
+		return h.setMachineCondition(machine, InfrastructureReady, status, reason, message)
+	} else if err != nil {
+		return machine, err
+	}
+
 	rkeBootstrap, err := h.bootstrapCache.Get(machine.Namespace, machine.Spec.Bootstrap.ConfigRef.Name)
 	if err != nil {
 		return machine, err
@@ -184,11 +195,6 @@ func (h *handler) OnChange(key string, machine *capi.Machine) (*capi.Machine, er
 		return machine, err
 	}
 
-	status, reason, message, providerID, err := h.getInfraMachineState(machine)
-	if err != nil {
-		return machine, err
-	}
-
 	if status == "" {
 		status, reason, message = planner.GetPlanStatusReasonMessage(machine, plan)
 	}
@@ -205,33 +211,39 @@ func (h *handler) OnChange(key string, machine *capi.Machine) (*capi.Machine, er
 					h.bootstrapController.Enqueue(machine.Spec.Bootstrap.ConfigRef.Namespace, machine.Spec.Bootstrap.ConfigRef.Name)
 				} else if planner.IsOnlyEtcd(machine) {
 					message = "waiting for cluster agent to be available on a control plane node"
+					h.machines.EnqueueAfter(machine.Namespace, machine.Name, 2*time.Second)
 				} else {
 					message = "waiting for cluster agent to be available"
+					h.machines.EnqueueAfter(machine.Namespace, machine.Name, 2*time.Second)
 				}
 			}
 		}
 	}
 
-	if corev1.ConditionStatus(Provisioned.GetStatus(machine)) != status ||
-		Provisioned.GetReason(machine) != string(reason) ||
-		Provisioned.GetMessage(machine) != message {
+	return h.setMachineCondition(machine, Provisioned, status, reason, message)
+}
+
+func (h *handler) setMachineCondition(machine *capi.Machine, cond condition.Cond, status corev1.ConditionStatus, reason, message string) (*capi.Machine, error) {
+	if corev1.ConditionStatus(cond.GetStatus(machine)) != status ||
+		cond.GetReason(machine) != reason ||
+		cond.GetMessage(machine) != message {
 		machine := machine.DeepCopy()
 		newCond := capi.Condition{
-			Type:               capi.ConditionType(Provisioned),
+			Type:               capi.ConditionType(cond),
 			Status:             status,
 			LastTransitionTime: metav1.Now(),
-			Reason:             string(reason),
+			Reason:             reason,
 			Message:            message,
 		}
-		if status == corev1.ConditionFalse {
+		if cond != InfrastructureReady && status == corev1.ConditionFalse {
 			newCond.Severity = capi.ConditionSeverityError
 		} else {
 			newCond.Severity = capi.ConditionSeverityInfo
 		}
 
 		set := false
-		for i, cond := range machine.Status.Conditions {
-			if string(cond.Type) == string(Provisioned) {
+		for i, c := range machine.Status.Conditions {
+			if string(c.Type) == string(cond) {
 				set = true
 				machine.Status.Conditions[i] = newCond
 				break
@@ -252,9 +264,19 @@ func (h *handler) OnChange(key string, machine *capi.Machine) (*capi.Machine, er
 }
 
 func (h *handler) getInfraMachineState(capiMachine *capi.Machine) (status corev1.ConditionStatus, reason, message, providerID string, err error) {
+	if capiMachine.Status.FailureReason != nil && capiMachine.Status.FailureMessage != nil {
+		return corev1.ConditionFalse, "MachineCreateFailed",
+			fmt.Sprintf("failed creating server (%s) in infrastructure provider: %s: %s",
+				capiMachine.Spec.InfrastructureRef.Kind,
+				*capiMachine.Status.FailureReason,
+				*capiMachine.Status.FailureMessage), "", nil
+	}
 	gvk := schema.FromAPIVersionAndKind(capiMachine.Spec.InfrastructureRef.APIVersion, capiMachine.Spec.InfrastructureRef.Kind)
 	machine, err := h.dynamic.Get(gvk, capiMachine.Namespace, capiMachine.Spec.InfrastructureRef.Name)
 	if apierror.IsNotFound(err) {
+		if capiMachine.DeletionTimestamp != nil {
+			return corev1.ConditionFalse, capi.DeletedReason, "machine infrastructure is deleted", "", err
+		}
 		return corev1.ConditionUnknown, "NoMachineDefined", "waiting for machine to be defined", "", nil
 	} else if err != nil {
 		return "", "", "", "", err

@@ -1,6 +1,8 @@
 package provisioningcluster
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,8 +10,10 @@ import (
 	"github.com/rancher/lasso/pkg/dynamic"
 	rancherv1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	rkev1 "github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1"
+	"github.com/rancher/rancher/pkg/controllers/provisioningv2/rke2/machineprovision"
 	mgmtcontroller "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/provisioningv2/rke2/planner"
+	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/data"
 	"github.com/rancher/wrangler/pkg/data/convert"
 	v1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
@@ -17,6 +21,7 @@ import (
 	"github.com/rancher/wrangler/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -73,17 +78,60 @@ func pruneBySchema(kind string, data map[string]interface{}, dynamicSchema mgmtc
 	return nil
 }
 
+func takeOwnership(dynamic *dynamic.Controller, cluster *rancherv1.Cluster, nodeConfig runtime.Object) error {
+	m, err := meta.Accessor(nodeConfig)
+	if err != nil {
+		return err
+	}
+
+	for _, owner := range m.GetOwnerReferences() {
+		if owner.Kind == "Cluster" && owner.APIVersion == "provisioning.cattle.io/v1" {
+			if owner.Name != cluster.Name {
+				return fmt.Errorf("can not use %s/%s [%v] because it is already owned by cluster %s",
+					m.GetNamespace(), m.GetName(), nodeConfig.GetObjectKind().GroupVersionKind(), owner.Name)
+			}
+			return nil
+		}
+		if owner.Controller != nil && *owner.Controller {
+			return fmt.Errorf("can not use %s/%s [%v] because it is already owned by %s %s",
+				m.GetNamespace(), m.GetName(), nodeConfig.GetObjectKind().GroupVersionKind(), owner.Kind, owner.Name)
+		}
+	}
+
+	// Take ownership
+
+	nodeConfig = nodeConfig.DeepCopyObject()
+	m, err = meta.Accessor(nodeConfig)
+	if err != nil {
+		return err
+	}
+	m.SetOwnerReferences(append(m.GetOwnerReferences(), metav1.OwnerReference{
+		APIVersion:         "provisioning.cattle.io/v1",
+		Kind:               "Cluster",
+		Name:               cluster.Name,
+		UID:                cluster.UID,
+		Controller:         &[]bool{true}[0],
+		BlockOwnerDeletion: &[]bool{true}[0],
+	}))
+	_, err = dynamic.Update(nodeConfig)
+	return err
+}
+
 func toMachineTemplate(machinePoolName string, cluster *rancherv1.Cluster, machinePool rancherv1.RKEMachinePool,
 	dynamic *dynamic.Controller, dynamicSchema mgmtcontroller.DynamicSchemaCache, secrets v1.SecretCache) (*unstructured.Unstructured, error) {
 	apiVersion := machinePool.NodeConfig.APIVersion
 	kind := machinePool.NodeConfig.Kind
 	if apiVersion == "" {
-		apiVersion = "rke-machine-config.cattle.io/v1"
+		apiVersion = defaultMachineConfigAPIVersion
 	}
 
 	gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
 	nodeConfig, err := dynamic.Get(gvk, cluster.Namespace, machinePool.NodeConfig.Name)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := takeOwnership(dynamic, cluster, nodeConfig); err != nil {
 		return nil, err
 	}
 
@@ -108,28 +156,55 @@ func toMachineTemplate(machinePoolName string, cluster *rancherv1.Cluster, machi
 	}
 
 	if secretName != "" {
-		_, err := secrets.Get(cluster.Namespace, secretName)
+		_, err := machineprovision.GetCloudCredentialSecret(secrets, cluster.Namespace, secretName)
 		if err != nil {
 			return nil, err
 		}
 		machinePoolData.SetNested(secretName, "common", "cloudCredentialSecretName")
 	}
 
-	return &unstructured.Unstructured{
+	ustr := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"kind":       strings.TrimSuffix(kind, "Config") + "MachineTemplate",
 			"apiVersion": "rke-machine.cattle.io/v1",
 			"metadata": map[string]interface{}{
 				"name":      machinePoolName,
 				"namespace": cluster.Namespace,
+				"labels": map[string]interface{}{
+					apply.LabelPrune: "false",
+				},
 			},
 			"spec": map[string]interface{}{
+				"clusterName": cluster.Name,
 				"template": map[string]interface{}{
 					"spec": map[string]interface{}(machinePoolData),
 				},
 			},
 		},
-	}, nil
+	}
+	ustr.SetName(name.SafeConcatName(ustr.GetName(), createMachineTemplateHash(ustr.Object)))
+	return ustr, nil
+}
+
+func createMachineTemplateHash(dataMap map[string]interface{}) string {
+	ustr := &unstructured.Unstructured{Object: dataMap}
+	dataMap = ustr.DeepCopy().Object
+
+	name, _, _ := unstructured.NestedString(dataMap, "metadata", "name")
+	spec, _, _ := unstructured.NestedMap(dataMap, "spec", "template", "spec")
+	unstructured.RemoveNestedField(spec, "common")
+	planner.PruneEmpty(spec)
+
+	sha := sha256.New()
+	sha.Write([]byte(name))
+
+	// ignore errors, shouldn't happen
+	bytes, _ := json.Marshal(spec)
+
+	sha.Write(bytes)
+
+	hash := sha.Sum(nil)
+	return hex.EncodeToString(hash[:])[:8]
 }
 
 func machineDeployments(cluster *rancherv1.Cluster, capiCluster *capi.Cluster, dynamic *dynamic.Controller,
@@ -264,6 +339,9 @@ func machineDeployments(cluster *rancherv1.Cluster, capiCluster *capi.Cluster, d
 		}
 
 		if len(machinePool.Labels) > 0 {
+			for k, v := range machinePool.Labels {
+				machineDeployment.Spec.Template.Labels[k] = v
+			}
 			if err := assign(machineDeployment.Spec.Template.Annotations, planner.LabelsAnnotation, machinePool.Labels); err != nil {
 				return nil, err
 			}

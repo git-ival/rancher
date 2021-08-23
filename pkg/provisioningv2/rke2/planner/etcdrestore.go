@@ -32,7 +32,7 @@ func newETCDRestore(clients *wrangler.Context, store *PlanStore) *etcdRestore {
 	}
 }
 
-func (e *etcdRestore) setState(controlPlane *rkev1.RKEControlPlane, status *rkev1.ETCDSnapshot, phase rkev1.ETCDSnapshotPhase) error {
+func (e *etcdRestore) setState(controlPlane *rkev1.RKEControlPlane, status *rkev1.ETCDSnapshotRestore, phase rkev1.ETCDSnapshotPhase) error {
 	controlPlane = controlPlane.DeepCopy()
 	controlPlane.Status.ETCDSnapshotRestorePhase = phase
 	controlPlane.Status.ETCDSnapshotRestore = status
@@ -85,7 +85,7 @@ func ensureInstalledInstruction(controlPlane *rkev1.RKEControlPlane) plan.Instru
 	}
 }
 
-func (e *etcdRestore) restorePlan(controlPlane *rkev1.RKEControlPlane, snapshot *rkev1.ETCDSnapshot) (plan.NodePlan, error) {
+func (e *etcdRestore) restorePlan(controlPlane *rkev1.RKEControlPlane, snapshot *rkev1.ETCDSnapshotRestore) (plan.NodePlan, error) {
 	args := []string{
 		"server",
 		"--cluster-reset",
@@ -113,7 +113,6 @@ func (e *etcdRestore) restorePlan(controlPlane *rkev1.RKEControlPlane, snapshot 
 			ensureInstalledInstruction(controlPlane),
 			{
 				Name:    "restore",
-				Image:   getInstallerImage(controlPlane),
 				Env:     s3Env,
 				Args:    append(args, s3Args...),
 				Command: GetRuntimeCommand(controlPlane.Spec.KubernetesVersion),
@@ -123,13 +122,11 @@ func (e *etcdRestore) restorePlan(controlPlane *rkev1.RKEControlPlane, snapshot 
 }
 
 func (e *etcdRestore) stopPlan(controlPlane *rkev1.RKEControlPlane) (plan.NodePlan, error) {
-	image := getInstallerImage(controlPlane)
 	return commonNodePlan(e.secrets, controlPlane, plan.NodePlan{
 		Instructions: []plan.Instruction{
 			ensureInstalledInstruction(controlPlane),
 			{
 				Name:    "shutdown",
-				Image:   image,
 				Command: "systemctl",
 				Args: []string{
 					"stop", GetRuntimeServerUnit(controlPlane.Spec.KubernetesVersion),
@@ -137,7 +134,6 @@ func (e *etcdRestore) stopPlan(controlPlane *rkev1.RKEControlPlane) (plan.NodePl
 			},
 			{
 				Name:    "shutdown",
-				Image:   image,
 				Command: fmt.Sprintf("%s-killall.sh", GetRuntimeCommand(controlPlane.Spec.KubernetesVersion)),
 			},
 		},

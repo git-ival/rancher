@@ -105,11 +105,7 @@ func ConvertTokenResource(schema *types.Schema, token v3.Token) (map[string]inte
 
 func GetKubeConfigToken(userName, responseType string, userMGR user.Manager) (*v3.Token, string, error) {
 	// create kubeconfig expiring tokens if responseType=kubeconfig in login action vs login tokens for responseType=json
-	clusterID := ""
-	responseSplit := strings.SplitN(responseType, "_", 2)
-	if len(responseSplit) == 2 {
-		clusterID = responseSplit[1]
-	}
+	clusterID := extractClusterIDFromResponseType(responseType)
 
 	logrus.Debugf("getKubeConfigToken: responseType %s", responseType)
 	name := "kubeconfig-" + userName
@@ -125,13 +121,21 @@ func GetKubeConfigToken(userName, responseType string, userMGR user.Manager) (*v
 	return token, tokenVal, nil
 }
 
+func extractClusterIDFromResponseType(responseType string) string {
+	responseSplit := strings.SplitN(responseType, "_", 2)
+	if len(responseSplit) != 2 {
+		return ""
+	}
+	return responseSplit[1]
+}
+
 // Given a stored token with hashed key, check if the provided (unhashed) tokenKey matches and is valid
 func VerifyToken(storedToken *v3.Token, tokenName, tokenKey string) (int, error) {
 	invalidAuthTokenErr := errors.New("Invalid auth token value")
 	if storedToken.ObjectMeta.Name != tokenName {
 		return 422, invalidAuthTokenErr
 	}
-	if features.TokenHashing.Enabled() {
+	if storedToken.Annotations != nil && storedToken.Annotations[TokenHashed] == "true" {
 		if err := VerifySHA256Hash(storedToken.Token, tokenKey); err != nil {
 			logrus.Errorf("VerifySHA256Hash failed with error: %v", err)
 			return 422, invalidAuthTokenErr

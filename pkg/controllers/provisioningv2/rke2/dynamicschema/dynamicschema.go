@@ -21,7 +21,7 @@ import (
 
 const (
 	machineAPIGroup       = "rke-machine.cattle.io"
-	machineConfigAPIGroup = "rke-machine-config.cattle.io"
+	MachineConfigAPIGroup = "rke-machine-config.cattle.io"
 )
 
 type handler struct {
@@ -74,7 +74,7 @@ func addMachineSchema(name string, specSchema, statusSchema *schemas.Schema, all
 	})
 }
 
-func addMachineTemplateSchema(name string, specSchema, statusSchema *schemas.Schema, allSchemas *schemas.Schemas) (string, error) {
+func addMachineTemplateSchema(name string, specSchema *schemas.Schema, allSchemas *schemas.Schemas) (string, error) {
 	templateTemplateSpecSchemaID := name + "MachineTemplateTemplateSpec"
 	err := allSchemas.AddSchema(schemas.Schema{
 		ID: templateTemplateSpecSchemaID,
@@ -95,6 +95,9 @@ func addMachineTemplateSchema(name string, specSchema, statusSchema *schemas.Sch
 			"template": {
 				Type: templateTemplateSpecSchemaID,
 			},
+			"clusterName": {
+				Type: "string",
+			},
 		},
 	})
 	if err != nil {
@@ -107,9 +110,6 @@ func addMachineTemplateSchema(name string, specSchema, statusSchema *schemas.Sch
 		ResourceFields: map[string]schemas.Field{
 			"spec": {
 				Type: templateSpecSchemaID,
-			},
-			"status": {
-				Type: statusSchema.ID,
 			},
 		},
 	})
@@ -136,7 +136,7 @@ func getSchemas(name string, spec *v3.DynamicSchemaSpec) (string, string, string
 		return "", "", "", nil, err
 	}
 
-	templateID, err := addMachineTemplateSchema(name, specSchema, statusSchema, allSchemas)
+	templateID, err := addMachineTemplateSchema(name, specSchema, allSchemas)
 	if err != nil {
 		return "", "", "", nil, err
 	}
@@ -248,6 +248,8 @@ func (h *handler) OnChange(obj *v3.DynamicSchema, status v3.DynamicSchemaStatus)
 		if err != nil {
 			return nil, status, err
 		}
+
+		_, ok := props.Properties["status"]
 		crd := crd.CRD{
 			GVK: schema.GroupVersionKind{
 				Group:   machineAPIGroup,
@@ -259,11 +261,11 @@ func (h *handler) OnChange(obj *v3.DynamicSchema, status v3.DynamicSchemaStatus)
 				"cluster.x-k8s.io/v1alpha4":      "v1",
 				"auth.cattle.io/cluster-indexed": "true",
 			},
-			Status: true,
+			Status: ok,
 		}
 
 		if nodeConfigID == id {
-			crd.GVK.Group = machineConfigAPIGroup
+			crd.GVK.Group = MachineConfigAPIGroup
 		}
 
 		crdObj, err := crd.ToCustomResourceDefinition()

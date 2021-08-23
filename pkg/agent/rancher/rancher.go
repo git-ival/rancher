@@ -21,9 +21,17 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+var (
+	started bool
+)
+
 func Run(ctx context.Context) error {
 	if err := setupSteveAggregation(); err != nil {
 		return err
+	}
+
+	if started {
+		return nil
 	}
 
 	if !features.MCMAgent.Enabled() {
@@ -46,7 +54,11 @@ func Run(ctx context.Context) error {
 	}
 
 	core.Core().V1().Service().OnChange(ctx, "rancher-installed", h.OnChange)
-	return core.Start(ctx, 1)
+	if err := core.Start(ctx, 1); err != nil {
+		return err
+	}
+	started = true
+	return nil
 }
 
 type handler struct {
@@ -122,7 +134,7 @@ func setupSteveAggregation() error {
 		"CATTLE_TOKEN":       []byte(token),
 		"CATTLE_CA_CHECKSUM": []byte(cluster.CAChecksum()),
 		"url":                []byte(url + "/v3/connect"),
-		"token":              []byte("steve-cluster-" + token),
+		"token":              []byte("stv-cluster-" + token),
 	}
 
 	ca, err := ioutil.ReadFile("/etc/kubernetes/ssl/certs/serverca")
@@ -135,12 +147,12 @@ func setupSteveAggregation() error {
 
 	return apply.
 		WithDynamicLookup().
-		WithSetID("rancher-steve-aggregation").
+		WithSetID("rancher-stv-aggregation").
 		WithListerNamespace(namespace.System).
 		ApplyObjects(&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: namespace.System,
-				Name:      "steve-aggregation",
+				Name:      "stv-aggregation",
 			},
 			Data: data,
 		})

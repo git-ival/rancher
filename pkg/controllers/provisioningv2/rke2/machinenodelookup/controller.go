@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	capi "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
@@ -101,12 +100,7 @@ func (h *handler) associateMachineWithNode(_ string, bootstrap *rkev1.RKEBootstr
 		return bootstrap, err
 	}
 
-	secret, err := h.kubeconfigManager.GetKubeConfig(rancherCluster, rancherCluster.Status)
-	if err != nil {
-		return bootstrap, err
-	}
-
-	config, err := clientcmd.RESTConfigFromKubeConfig(secret.Data["value"])
+	config, err := h.kubeconfigManager.GetRESTConfig(rancherCluster, rancherCluster.Status)
 	if err != nil {
 		return bootstrap, err
 	}
@@ -116,10 +110,10 @@ func (h *handler) associateMachineWithNode(_ string, bootstrap *rkev1.RKEBootstr
 		return bootstrap, err
 	}
 
-	nodeLabelSelector := metav1.LabelSelector{MatchLabels: map[string]string{"rke.cattle.io/machine": string(machine.GetUID())}}
+	nodeLabelSelector := metav1.LabelSelector{MatchLabels: map[string]string{planner.MachineUIDLabel: string(machine.GetUID())}}
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{LabelSelector: labels.Set(nodeLabelSelector.MatchLabels).String()})
 	if err != nil || len(nodes.Items) == 0 || nodes.Items[0].Spec.ProviderID == "" {
-		logrus.Infof("Failed to find providerID for selector %s in cluster %s/%s, machine %s: %v",
+		logrus.Infof("Searching for providerID for selector %s in cluster %s/%s, machine %s: %v",
 			labels.Set(nodeLabelSelector.MatchLabels), rancherCluster.Namespace, rancherCluster.Name, machine.Name, err)
 		h.rkeBootstrap.EnqueueAfter(bootstrap.Namespace, bootstrap.Name, nodeErrorEnqueueTime)
 		return bootstrap, nil

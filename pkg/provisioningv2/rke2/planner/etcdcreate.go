@@ -99,7 +99,6 @@ func (e *etcdCreate) createPlan(controlPlane *rkev1.RKEControlPlane, snapshot *r
 		Files: s3Files,
 		Instructions: []plan.Instruction{{
 			Name:    "create",
-			Image:   getInstallerImage(controlPlane),
 			Command: GetRuntimeCommand(controlPlane.Spec.KubernetesVersion),
 			Env:     s3Env,
 			Args:    append(args, s3Args...),
@@ -108,6 +107,10 @@ func (e *etcdCreate) createPlan(controlPlane *rkev1.RKEControlPlane, snapshot *r
 }
 
 func (e *etcdCreate) Create(controlPlane *rkev1.RKEControlPlane, clusterPlan *plan.Plan) error {
+	if !Provisioned.IsTrue(controlPlane) && controlPlane.Status.ETCDSnapshotCreatePhase == "" {
+		return nil
+	}
+
 	if controlPlane.Spec.ETCDSnapshotCreate == nil {
 		return e.resetEtcdCreateState(controlPlane)
 	}

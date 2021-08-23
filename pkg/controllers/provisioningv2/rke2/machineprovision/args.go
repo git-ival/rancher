@@ -7,10 +7,13 @@ import (
 	"strings"
 
 	rkev1 "github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1"
+	namespace2 "github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/wrangler/pkg/data"
 	"github.com/rancher/wrangler/pkg/data/convert"
+	corecontrollers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/wrangler/pkg/kv"
 	name2 "github.com/rancher/wrangler/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -20,12 +23,19 @@ import (
 	capi "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
+const (
+	CapiMachineLabel = "cluster.x-k8s.io/cluster-name"
+)
+
 var (
 	regExHyphen     = regexp.MustCompile("([a-z])([A-Z])")
 	envNameOverride = map[string]string{
-		"amazonec2": "AWS",
-		"rackspace": "OS",
-		"openstack": "OS",
+		"amazonec2":       "AWS",
+		"rackspace":       "OS",
+		"openstack":       "OS",
+		"vmwarevsphere":   "VSPHERE",
+		"vmwarefusion":    "FUSION",
+		"vmwarevcloudair": "VCLOUDAIR",
 	}
 )
 
@@ -81,6 +91,7 @@ func (h *handler) getArgsEnvAndStatus(typeMeta meta.Type, meta metav1.Object, da
 	}
 
 	for k, v := range secrets {
+		_, k = kv.RSplit(k, "-")
 		envName := envNameOverride[driver]
 		if envName == "" {
 			envName = driver
@@ -102,7 +113,12 @@ func (h *handler) getArgsEnvAndStatus(typeMeta meta.Type, meta metav1.Object, da
 		cmd = append(cmd, "create",
 			fmt.Sprintf("--driver=%s", driver),
 			fmt.Sprintf("--custom-install-script=/run/secrets/machine/value"))
-		cmd = append(cmd, toArgs(driver, args)...)
+
+		rancherCluster, err := h.rancherClusterCache.Get(meta.GetNamespace(), meta.GetLabels()[CapiMachineLabel])
+		if err != nil {
+			return driverArgs{}, err
+		}
+		cmd = append(cmd, toArgs(driver, args, rancherCluster.Status.ClusterName)...)
 	} else {
 		cmd = append(cmd, "rm", "-y")
 	}
@@ -178,7 +194,7 @@ func (h *handler) getSecretData(meta metav1.Object, obj data.Object, create bool
 	}
 
 	if cloudCredentialSecretName != "" {
-		secret, err := h.secrets.Get(meta.GetNamespace(), cloudCredentialSecretName)
+		secret, err := GetCloudCredentialSecret(h.secrets, meta.GetNamespace(), cloudCredentialSecretName)
 		if err != nil {
 			return "", "", nil, err
 		}
@@ -196,7 +212,24 @@ func (h *handler) getSecretData(meta metav1.Object, obj data.Object, create bool
 	return bootstrapName, cloudCredentialSecretName, result, nil
 }
 
-func toArgs(driverName string, args map[string]interface{}) (cmd []string) {
+func GetCloudCredentialSecret(secrets corecontrollers.SecretCache, namespace, name string) (*corev1.Secret, error) {
+	globalNS, globalName := kv.Split(name, ":")
+	if globalName != "" && globalNS == namespace2.GlobalNamespace {
+		return secrets.Get(globalNS, globalName)
+	}
+	return secrets.Get(namespace, name)
+}
+
+func toArgs(driverName string, args map[string]interface{}, clusterID string) (cmd []string) {
+	if driverName == "amazonec2" {
+		tagValue := fmt.Sprintf("kubernetes.io/cluster/%s,owned", clusterID)
+		if tags, ok := args["tags"]; !ok || convert.ToString(tags) == "" {
+			args["tags"] = tagValue
+		} else {
+			args["tags"] = convert.ToString(tags) + "," + tagValue
+		}
+	}
+
 	for k, v := range args {
 		dmField := "--" + driverName + "-" + strings.ToLower(regExHyphen.ReplaceAllString(k, "${1}-${2}"))
 		if v == nil {

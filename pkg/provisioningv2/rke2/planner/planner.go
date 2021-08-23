@@ -23,6 +23,7 @@ import (
 	"github.com/rancher/rancher/pkg/provisioningv2/kubeconfig"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/wrangler"
+	"github.com/rancher/wrangler/pkg/condition"
 	"github.com/rancher/wrangler/pkg/data/convert"
 	corecontrollers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
 	"github.com/rancher/wrangler/pkg/generic"
@@ -54,7 +55,7 @@ const (
 	ControlPlaneRoleLabel      = "rke.cattle.io/control-plane-role"
 	MachineUIDLabel            = "rke.cattle.io/machine"
 	MachineIDLabel             = "rke.cattle.io/machine-id"
-	capiMachineLabel           = "cluster.x-k8s.io/cluster-name"
+	CapiMachineLabel           = "cluster.x-k8s.io/cluster-name"
 
 	MachineNameLabel      = "rke.cattle.io/machine-name"
 	MachineNamespaceLabel = "rke.cattle.io/machine-namespace"
@@ -62,9 +63,14 @@ const (
 	LabelsAnnotation = "rke.cattle.io/labels"
 	TaintsAnnotation = "rke.cattle.io/taints"
 
+	AddressAnnotation         = "rke.cattle.io/address"
+	InternalAddressAnnotation = "rke.cattle.io/internal-address"
+
 	SecretTypeMachinePlan = "rke.cattle.io/machine-plan"
 
 	authnWebhookFileName = "/var/lib/rancher/%s/kube-api-authn-webhook.yaml"
+	ConfigYamlFileName   = "/etc/rancher/%s/config.yaml.d/50-rancher.yaml"
+	Provisioned          = condition.Cond("Provisioned")
 )
 
 var (
@@ -145,6 +151,10 @@ func New(ctx context.Context, clients *wrangler.Context) *Planner {
 		kubeconfig:                    kubeconfig.New(clients),
 		etcdRestore:                   newETCDRestore(clients, store),
 		etcdCreate:                    newETCDCreate(clients, store),
+		etcdArgs: s3Args{
+			prefix:      "etcd-",
+			secretCache: clients.Core.Secret().Cache(),
+		},
 	}
 }
 
@@ -539,7 +549,7 @@ func (p *Planner) addETCD(config map[string]interface{}, controlPlane *rkev1.RKE
 	}
 
 	if controlPlane.Spec.ETCD.DisableSnapshots {
-		config["etcd-disable-snapshot"] = true
+		config["etcd-disable-snapshots"] = true
 	}
 	if controlPlane.Spec.ETCD.SnapshotRetention > 0 {
 		config["etcd-snapshot-retention"] = controlPlane.Spec.ETCD.SnapshotRetention
@@ -569,6 +579,9 @@ func (p *Planner) addETCD(config map[string]interface{}, controlPlane *rkev1.RKE
 func addDefaults(config map[string]interface{}, controlPlane *rkev1.RKEControlPlane, machine *capi.Machine) {
 	if GetRuntime(controlPlane.Spec.KubernetesVersion) == RuntimeRKE2 {
 		config["cni"] = "calico"
+		if settings.SystemDefaultRegistry.Get() != "" {
+			config["system-default-registry"] = settings.SystemDefaultRegistry.Get()
+		}
 	}
 }
 
@@ -582,11 +595,10 @@ func addUserConfig(config map[string]interface{}, controlPlane *rkev1.RKEControl
 		if err != nil {
 			return err
 		}
-		if sel.Matches(labels.Set(machine.Labels)) {
+		if opts.MachineLabelSelector == nil || sel.Matches(labels.Set(machine.Labels)) {
 			for k, v := range opts.Config.Data {
 				config[k] = v
 			}
-			break
 		}
 	}
 
@@ -738,7 +750,6 @@ func (p *Planner) addInstruction(nodePlan plan.NodePlan, controlPlane *rkev1.RKE
 func (p *Planner) addInitNodeInstruction(nodePlan plan.NodePlan, controlPlane *rkev1.RKEControlPlane, machine *capi.Machine) (plan.NodePlan, error) {
 	nodePlan.Instructions = append(nodePlan.Instructions, plan.Instruction{
 		Name:       "capture-address",
-		Image:      getInstallerImage(controlPlane),
 		Command:    "sh",
 		SaveOutput: true,
 		Args: []string{
@@ -765,6 +776,38 @@ func addToken(config map[string]interface{}, machine *capi.Machine, secret plan.
 	}
 }
 
+func PruneEmpty(config map[string]interface{}) {
+	for k, v := range config {
+		if v == nil {
+			delete(config, k)
+		}
+		switch t := v.(type) {
+		case string:
+			if t == "" {
+				delete(config, k)
+			}
+		case []interface{}:
+			if len(t) == 0 {
+				delete(config, k)
+			}
+		case []string:
+			if len(t) == 0 {
+				delete(config, k)
+			}
+		}
+	}
+}
+
+func addAddresses(config map[string]interface{}, machine *capi.Machine) {
+	if data := machine.Annotations[AddressAnnotation]; data != "" {
+		config["node-external-ip"] = data
+	}
+
+	if data := machine.Annotations[InternalAddressAnnotation]; data != "" {
+		config["node-ip"] = data
+	}
+}
+
 func addLabels(config map[string]interface{}, machine *capi.Machine) error {
 	var labels []string
 	if data := machine.Annotations[LabelsAnnotation]; data != "" {
@@ -785,23 +828,47 @@ func addLabels(config map[string]interface{}, machine *capi.Machine) error {
 	return nil
 }
 
-func addTaints(config map[string]interface{}, machine *capi.Machine) error {
+func getTaints(machine *capi.Machine, runtime string) (result []corev1.Taint, _ error) {
+	data := machine.Annotations[TaintsAnnotation]
+	if data != "" {
+		if err := json.Unmarshal([]byte(data), &result); err != nil {
+			return result, err
+		}
+	}
+
+	if runtime == RuntimeRKE2 {
+		if isEtcd(machine) && !isWorker(machine) {
+			result = append(result, corev1.Taint{
+				Key:    "node-role.kubernetes.io/etcd",
+				Effect: corev1.TaintEffectNoExecute,
+			})
+		}
+
+		if isControlPlane(machine) && !isWorker(machine) {
+			result = append(result, corev1.Taint{
+				Key:    "node-role.kubernetes.io/control-plane",
+				Effect: corev1.TaintEffectNoSchedule,
+			})
+		}
+	}
+
+	return
+}
+
+func addTaints(config map[string]interface{}, machine *capi.Machine, runtime string) error {
 	var (
-		taints      []corev1.Taint
 		taintString []string
 	)
 
-	data := machine.Annotations[TaintsAnnotation]
-	if data == "" {
-		return nil
-	}
-
-	if err := json.Unmarshal([]byte(data), &taints); err != nil {
+	taints, err := getTaints(machine, runtime)
+	if err != nil {
 		return err
 	}
 
 	for _, taint := range taints {
-		taintString = append(taintString, fmt.Sprintf("%s=%s:%s", taint.Key, taint.Value, taint.Effect))
+		if taint.Key != "" {
+			taintString = append(taintString, taint.ToString())
+		}
 	}
 
 	sort.Strings(taintString)
@@ -841,12 +908,14 @@ func (p *Planner) addConfigFile(nodePlan plan.NodePlan, controlPlane *rkev1.RKEC
 	addRoleConfig(config, controlPlane, machine, initNode, joinServer)
 	addLocalClusterAuthenticationEndpointConfig(config, controlPlane, machine)
 	addToken(config, machine, secret)
+	addAddresses(config, machine)
 
 	if err := addLabels(config, machine); err != nil {
 		return nodePlan, err
 	}
 
-	if err := addTaints(config, machine); err != nil {
+	runtime := GetRuntime(controlPlane.Spec.KubernetesVersion)
+	if err := addTaints(config, machine, runtime); err != nil {
 		return nodePlan, err
 	}
 
@@ -864,6 +933,8 @@ func (p *Planner) addConfigFile(nodePlan plan.NodePlan, controlPlane *rkev1.RKEC
 		})
 	}
 
+	PruneEmpty(config)
+
 	configData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return nodePlan, err
@@ -871,7 +942,7 @@ func (p *Planner) addConfigFile(nodePlan plan.NodePlan, controlPlane *rkev1.RKEC
 
 	nodePlan.Files = append(nodePlan.Files, plan.File{
 		Content: base64.StdEncoding.EncodeToString(configData),
-		Path:    fmt.Sprintf("/etc/rancher/%s/config.yaml.d/50-rancher.yaml", GetRuntime(controlPlane.Spec.KubernetesVersion)),
+		Path:    fmt.Sprintf(ConfigYamlFileName, GetRuntime(controlPlane.Spec.KubernetesVersion)),
 	})
 
 	return nodePlan, nil

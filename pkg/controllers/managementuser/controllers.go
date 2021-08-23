@@ -7,6 +7,7 @@ import (
 	"github.com/rancher/rancher/pkg/controllers/managementuser/certsexpiration"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/clusterauthtoken"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/healthsyncer"
+	"github.com/rancher/rancher/pkg/controllers/managementuser/machinerole"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/networkpolicy"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/nodesyncer"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/nsserviceaccount"
@@ -46,6 +47,7 @@ func Register(ctx context.Context, cluster *config.UserContext, clusterRec *mana
 			return err
 		}
 		pspdelete.Register(ctx, cluster)
+		machinerole.Register(ctx, cluster)
 	}
 
 	// register controller for API
@@ -74,8 +76,11 @@ func RegisterFollower(ctx context.Context, cluster *config.UserContext, kubeConf
 	cluster.Core.Namespaces("").Controller()
 	cluster.Core.Services("").Controller()
 	cluster.RBAC.ClusterRoleBindings("").Controller()
+	cluster.RBAC.ClusterRoles("").Controller()
 	cluster.RBAC.RoleBindings("").Controller()
 	cluster.Core.Endpoints("").Controller()
 	cluster.APIAggregation.APIServices("").Controller()
+	cluster.Core.Secrets("").Controller()
+	cluster.Core.ServiceAccounts("").Controller()
 	return nil
 }

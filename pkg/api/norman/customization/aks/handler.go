@@ -1,13 +1,17 @@
 package aks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/Azure/go-autorest/autorest/azure"
 	"github.com/gorilla/mux"
+	"github.com/rancher/aks-operator/pkg/aks"
+	"github.com/rancher/machine/drivers/azure/azureutil"
 	"github.com/rancher/norman/api/access"
 	"github.com/rancher/norman/httperror"
 	"github.com/rancher/norman/types"
@@ -20,6 +24,12 @@ import (
 	schema "github.com/rancher/rancher/pkg/schemas/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	tenantIDAnnotation          = "cluster.management.cattle.io/azure-tenant-id"
+	tenantIDTimestampAnnotation = "cluster.management.cattle.io/azure-tenant-id-created-at"
+	tenantIDTimeout             = time.Hour
 )
 
 type Capabilities struct {
@@ -38,6 +48,7 @@ type handler struct {
 	secretsLister v1.SecretLister
 	clusterLister v3.ClusterLister
 	ac            types.AccessControl
+	secretClient  v1.SecretInterface
 }
 
 func NewAKSHandler(scaledContext *config.ScaledContext) http.Handler {
@@ -46,11 +57,26 @@ func NewAKSHandler(scaledContext *config.ScaledContext) http.Handler {
 		secretsLister: scaledContext.Core.Secrets(namespace.GlobalNamespace).Controller().Lister(),
 		clusterLister: scaledContext.Management.Clusters("").Controller().Lister(),
 		ac:            scaledContext.AccessControl,
+		secretClient:  scaledContext.Core.Secrets(namespace.GlobalNamespace),
 	}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, req *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
+
+	resourceType := mux.Vars(req)["resource"]
+
+	if resourceType == "aksCheckCredentials" {
+		if req.Method != http.MethodPost {
+			handleErr(writer, http.StatusMethodNotAllowed, fmt.Errorf("use POST for this endpoint"))
+			return
+		}
+		if errCode, err := h.checkCredentials(req); err != nil {
+			handleErr(writer, errCode, err)
+			return
+		}
+		return
+	}
 
 	capa := &Capabilities{}
 
@@ -72,8 +98,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, req *http.Request) {
 	var serialized []byte
 	var errCode int
 	var err error
-
-	resourceType := mux.Vars(req)["resource"]
 
 	switch resourceType {
 	case "aksVersions":
@@ -116,6 +140,52 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func (h *handler) checkCredentials(req *http.Request) (int, error) {
+	cred := &Capabilities{}
+	raw, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		return http.StatusBadRequest, fmt.Errorf("cannot read request body: %v", err)
+	}
+
+	if err = json.Unmarshal(raw, &cred); err != nil {
+		return http.StatusBadRequest, fmt.Errorf("cannot parse request body: %v", err)
+	}
+
+	if cred.SubscriptionID == "" {
+		return http.StatusBadRequest, fmt.Errorf("must provide subscriptionId")
+	}
+	if cred.ClientID == "" {
+		return http.StatusBadRequest, fmt.Errorf("must provide clientId")
+	}
+	if cred.ClientSecret == "" {
+		return http.StatusBadRequest, fmt.Errorf("must provide clientSecret")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if cred.TenantID == "" {
+		cred.TenantID, err = azureutil.FindTenantID(ctx, azure.PublicCloud, cred.SubscriptionID)
+		if err != nil {
+			return http.StatusBadRequest, fmt.Errorf("could not find tenant ID: %w", err)
+		}
+	}
+	if cred.BaseURL == "" {
+		cred.BaseURL = azure.PublicCloud.ResourceManagerEndpoint
+	}
+	if cred.AuthBaseURL == "" {
+		cred.AuthBaseURL = azure.PublicCloud.ActiveDirectoryEndpoint
+	}
+	client, err := NewSubscriptionServiceClient(cred)
+	if err != nil {
+		return http.StatusUnauthorized, fmt.Errorf("invalid credentials")
+	}
+	_, err = client.Get(ctx, cred.SubscriptionID)
+	if err != nil {
+		return http.StatusUnauthorized, fmt.Errorf("invalid credentials")
+	}
+
+	return http.StatusOK, nil
+}
+
 func (h *handler) getCloudCredential(req *http.Request, cap *Capabilities, credID string) (int, error) {
 	ns, name := ref.Parse(credID)
 	if ns == "" || name == "" {
@@ -153,6 +223,13 @@ func (h *handler) getCloudCredential(req *http.Request, cap *Capabilities, credI
 	cap.SubscriptionID = string(cc.Data["azurecredentialConfig-subscriptionId"])
 	cap.ClientID = string(cc.Data["azurecredentialConfig-clientId"])
 	cap.ClientSecret = string(cc.Data["azurecredentialConfig-clientSecret"])
+
+	if cap.TenantID == "" {
+		cap.TenantID, err = aks.GetCachedTenantID(h.secretClient, cap.SubscriptionID, cc)
+		if err != nil {
+			return httperror.ServerError.Status, err
+		}
+	}
 
 	cap.BaseURL = req.URL.Query().Get("baseUrl")
 	if cap.BaseURL == "" {

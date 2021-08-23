@@ -2,8 +2,6 @@ package cluster
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"regexp"
 
 	"github.com/rancher/norman/types/convert"
@@ -14,6 +12,7 @@ import (
 	mgmtcontrollers "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	rocontrollers "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
 	"github.com/rancher/rancher/pkg/provisioningv2/kubeconfig"
+	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/rancher/rancher/pkg/wrangler"
 	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/condition"
@@ -22,8 +21,10 @@ import (
 	"github.com/rancher/wrangler/pkg/genericcondition"
 	"github.com/rancher/wrangler/pkg/kstatus"
 	"github.com/rancher/wrangler/pkg/name"
+	"github.com/rancher/wrangler/pkg/randomtoken"
 	"github.com/rancher/wrangler/pkg/relatedresource"
 	"github.com/rancher/wrangler/pkg/yaml"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,7 +38,7 @@ const (
 )
 
 var (
-	mgmtNameRegexp = regexp.MustCompile("c-[a-z0-9]{5}|local")
+	mgmtNameRegexp = regexp.MustCompile("^(c-[a-z0-9]{5}|local)$")
 )
 
 type handler struct {
@@ -104,14 +105,17 @@ func Register(
 	)
 
 	clients.Mgmt.Cluster().OnChange(ctx, "cluster-watch", h.createToken)
-	clusterCache := clients.Provisioning.Cluster().Cache()
 	relatedresource.Watch(ctx, "cluster-watch", h.clusterWatch,
 		clients.Provisioning.Cluster(), clients.Mgmt.Cluster())
 
-	clusterCache.AddIndexer(ByCluster, byClusterIndex)
-
 	clients.Mgmt.Cluster().OnRemove(ctx, "mgmt-cluster-remove", h.OnMgmtClusterRemove)
 	clients.Provisioning.Cluster().OnRemove(ctx, "provisioning-cluster-remove", h.OnClusterRemove)
+}
+
+func RegisterIndexers(context *config.ScaledContext) {
+	if features.RKE2.Enabled() {
+		context.Wrangler.Provisioning.Cluster().Cache().AddIndexer(ByCluster, byClusterIndex)
+	}
 }
 
 func byClusterIndex(obj *v1.Cluster) ([]string, error) {
@@ -221,19 +225,29 @@ func (h *handler) createCluster(cluster *v1.Cluster, status v1.ClusterStatus, sp
 	return h.createNewCluster(cluster, status, spec)
 }
 
-func mgmtClusterName(clusterNamespace, clusterName string) string {
-	hash := sha256.Sum256([]byte(clusterNamespace + "/" + clusterName))
-	return name.SafeConcatName("c", "m", hex.EncodeToString(hash[:])[:8])
+func mgmtClusterName() (string, error) {
+	rand, err := randomtoken.Generate()
+	if err != nil {
+		return "", err
+	}
+	return name.SafeConcatName("c", "m", rand[:8]), nil
 }
 
 func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus, spec v3.ClusterSpec) ([]runtime.Object, v1.ClusterStatus, error) {
 	spec.DisplayName = cluster.Name
 	spec.Description = cluster.Annotations["field.cattle.io/description"]
 	spec.FleetWorkspaceName = cluster.Namespace
-	spec.AgentEnvVars = cluster.Spec.AgentEnvVars
 	spec.DefaultPodSecurityPolicyTemplateName = cluster.Spec.DefaultPodSecurityPolicyTemplateName
 	spec.DefaultClusterRoleForProjectMembers = cluster.Spec.DefaultClusterRoleForProjectMembers
 	spec.EnableNetworkPolicy = cluster.Spec.EnableNetworkPolicy
+
+	spec.AgentEnvVars = nil
+	for _, env := range cluster.Spec.AgentEnvVars {
+		spec.AgentEnvVars = append(spec.AgentEnvVars, corev1.EnvVar{
+			Name:  env.Name,
+			Value: env.Value,
+		})
+	}
 
 	if cluster.Spec.RKEConfig != nil {
 		spec.LocalClusterAuthEndpoint = v3.LocalClusterAuthEndpoint{
@@ -245,11 +259,19 @@ func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus,
 
 	newCluster := &v3.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        mgmtClusterName(cluster.Namespace, cluster.Name),
+			Name:        cluster.Status.ClusterName,
 			Labels:      cluster.Labels,
 			Annotations: map[string]string{},
 		},
 		Spec: spec,
+	}
+
+	if newCluster.Name == "" {
+		mgmtName, err := mgmtClusterName()
+		if err != nil {
+			return nil, status, err
+		}
+		newCluster.Name = mgmtName
 	}
 
 	for k, v := range cluster.Annotations {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,10 +13,15 @@ import (
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/rancher/rancher/pkg/api/steve/catalog/types"
 	catalog "github.com/rancher/rancher/pkg/apis/catalog.cattle.io/v1"
+	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/catalogv2/content"
 	"github.com/rancher/rancher/pkg/catalogv2/helmop"
+	catalogcontrollers "github.com/rancher/rancher/pkg/generated/controllers/catalog.cattle.io/v1"
+	mgmtcontrollers "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	corev1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
+	"github.com/rancher/rancher/pkg/settings"
 	corecontrollers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/pkg/merr"
 	"github.com/sirupsen/logrus"
 	"helm.sh/helm/v3/pkg/action"
 	release2 "helm.sh/helm/v3/pkg/release"
@@ -51,30 +57,40 @@ type desired struct {
 }
 
 type Manager struct {
-	ctx              context.Context
-	operation        *helmop.Operations
-	content          *content.Manager
-	restClientGetter genericclioptions.RESTClientGetter
-	pods             corecontrollers.PodClient
-	desiredCharts    map[desiredKey]map[string]interface{}
-	sync             chan desired
-	syncLock         sync.Mutex
+	ctx                   context.Context
+	operation             *helmop.Operations
+	content               *content.Manager
+	restClientGetter      genericclioptions.RESTClientGetter
+	pods                  corecontrollers.PodClient
+	desiredCharts         map[desiredKey]map[string]interface{}
+	sync                  chan desired
+	syncLock              sync.Mutex
+	refreshIntervalChange chan struct{}
+	settings              mgmtcontrollers.SettingController
+	trigger               chan struct{}
+	clusterRepos          catalogcontrollers.ClusterRepoController
 }
 
 func NewManager(ctx context.Context,
 	restClientGetter genericclioptions.RESTClientGetter,
 	contentManager *content.Manager,
 	ops *helmop.Operations,
-	pods corecontrollers.PodClient) (*Manager, error) {
+	pods corecontrollers.PodClient,
+	settings mgmtcontrollers.SettingController,
+	clusterRepos catalogcontrollers.ClusterRepoController) (*Manager, error) {
 
 	m := &Manager{
-		ctx:              ctx,
-		operation:        ops,
-		content:          contentManager,
-		restClientGetter: restClientGetter,
-		pods:             pods,
-		sync:             make(chan desired, 10),
-		desiredCharts:    map[desiredKey]map[string]interface{}{},
+		ctx:                   ctx,
+		operation:             ops,
+		content:               contentManager,
+		restClientGetter:      restClientGetter,
+		pods:                  pods,
+		sync:                  make(chan desired, 10),
+		desiredCharts:         map[desiredKey]map[string]interface{}{},
+		refreshIntervalChange: make(chan struct{}, 1),
+		settings:              settings,
+		trigger:               make(chan struct{}, 1),
+		clusterRepos:          clusterRepos,
 	}
 
 	return m, nil
@@ -83,32 +99,70 @@ func NewManager(ctx context.Context,
 func (m *Manager) Start(ctx context.Context) {
 	m.ctx = ctx
 	go m.runSync()
+
+	m.settings.OnChange(ctx, "system-feature-chart-refresh", m.onSetting)
+	m.clusterRepos.OnChange(ctx, "catalog-refresh-trigger", m.onTrigger)
+}
+
+func (m *Manager) onSetting(key string, obj *v3.Setting) (*v3.Setting, error) {
+	if key != settings.SystemFeatureChartRefreshSeconds.Name {
+		return obj, nil
+	}
+
+	m.refreshIntervalChange <- struct{}{}
+	return obj, nil
+}
+
+func (m *Manager) onTrigger(_ string, obj *catalog.ClusterRepo) (*catalog.ClusterRepo, error) {
+	// We only want to trigger on "rancher-charts" in order to ensure that required charts, such as
+	// Fleet, are up-to-date upon Rancher startup or upgrade.
+	if obj == nil || obj.DeletionTimestamp != nil || obj.Name != "rancher-charts" {
+		return obj, nil
+	}
+
+	m.trigger <- struct{}{}
+	return obj, nil
 }
 
 func (m *Manager) runSync() {
-	t := time.NewTicker(15 * time.Minute)
+	t := time.NewTicker(getIntervalOrDefault(settings.SystemFeatureChartRefreshSeconds.Get()))
 	defer t.Stop()
 
 	for {
 		select {
+		case <-m.refreshIntervalChange:
+			t = time.NewTicker(getIntervalOrDefault(settings.SystemFeatureChartRefreshSeconds.Get()))
 		case <-m.ctx.Done():
 			return
+		case <-m.trigger:
+			_ = m.installCharts(m.desiredCharts, true)
 		case <-t.C:
-			m.installCharts(m.desiredCharts, true)
+			_ = m.installCharts(m.desiredCharts, true)
 		case desired := <-m.sync:
 			v, exists := m.desiredCharts[desired.key]
-			m.desiredCharts[desired.key] = desired.values
 			// newly requested or changed
 			if !exists || !equality.Semantic.DeepEqual(v, desired.values) {
-				m.installCharts(map[desiredKey]map[string]interface{}{
+				err := m.installCharts(map[desiredKey]map[string]interface{}{
 					desired.key: desired.values,
 				}, desired.forceAdopt)
+				if err == nil {
+					m.desiredCharts[desired.key] = desired.values
+				}
 			}
 		}
 	}
 }
 
-func (m *Manager) installCharts(charts map[desiredKey]map[string]interface{}, forceAdopt bool) {
+func getIntervalOrDefault(interval string) time.Duration {
+	i, err := strconv.Atoi(interval)
+	if err != nil {
+		return 900 * time.Second
+	}
+	return time.Duration(i) * time.Second
+}
+
+func (m *Manager) installCharts(charts map[desiredKey]map[string]interface{}, forceAdopt bool) error {
+	var errs []error
 	for key, values := range charts {
 		for {
 			if err := m.install(key.namespace, key.name, key.minVersion, values, forceAdopt); err == repo.ErrNoChartName || apierrors.IsNotFound(err) {
@@ -117,10 +171,12 @@ func (m *Manager) installCharts(charts map[desiredKey]map[string]interface{}, fo
 				continue
 			} else if err != nil {
 				logrus.Errorf("Failed to install system chart %s: %v", key.name, err)
+				errs = append(errs, err)
 			}
 			break
 		}
 	}
+	return merr.NewErrors(errs...)
 }
 
 func (m *Manager) Uninstall(namespace, name string) error {
@@ -164,6 +220,14 @@ func (m *Manager) Ensure(namespace, name, minVersion string, values map[string]i
 		}
 	}()
 	return nil
+}
+
+func (m *Manager) Remove(namespace, name, minVersion string) {
+	delete(m.desiredCharts, desiredKey{
+		namespace:  namespace,
+		name:       name,
+		minVersion: minVersion,
+	})
 }
 
 func (m *Manager) install(namespace, name, minVersion string, values map[string]interface{}, forceAdopt bool) error {
@@ -343,6 +407,10 @@ func (m *Manager) isInstalled(namespace, name, version, minVersion string, desir
 			min, err := semver.NewVersion(minVersion)
 			if err != nil {
 				return false, "", nil, err
+			}
+			if desired.LessThan(min) {
+				logrus.Errorf("available chart version (%s) for %s is less than the min version (%s) ", desired, name, min)
+				return false, "", nil, repo.ErrNoChartName
 			}
 			if min.LessThan(ver) || min.Equal(ver) {
 				// If the current deployed version is greater or equal than the min version but configuration has changed, return false and upgrade with the current version

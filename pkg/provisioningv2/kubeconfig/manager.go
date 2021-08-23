@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
@@ -221,7 +222,15 @@ func (m *Manager) GetCRTBForAdmin(cluster *v1.Cluster, status v1.ClusterStatus) 
 func (m *Manager) getKubeConfigData(clusterNamespace, clusterName, secretName, managementClusterName string) (map[string][]byte, error) {
 	secret, err := m.secretCache.Get(clusterNamespace, secretName)
 	if err == nil {
-		return secret.Data, nil
+		if secret.Data == nil || secret.Data["token"] == nil {
+			// Check if we require a new secret based on the token value and annotation(s). We delete the old secret since it may contain
+			// annotations, owner references, etc. that are out of date. We will then continue to create the new secret.
+			if err := m.secrets.Delete(clusterNamespace, secretName, &metav1.DeleteOptions{}); err != nil && !apierror.IsNotFound(err) {
+				return nil, err
+			}
+		} else {
+			return secret.Data, nil
+		}
 	} else if !apierror.IsNotFound(err) {
 		return nil, err
 	}
@@ -284,6 +293,15 @@ func (m *Manager) getKubeConfigData(clusterNamespace, clusterName, secretName, m
 	}
 
 	return secret.Data, nil
+}
+
+func (m *Manager) GetRESTConfig(cluster *v1.Cluster, status v1.ClusterStatus) (*rest.Config, error) {
+	secret, err := m.GetKubeConfig(cluster, status)
+	if err != nil {
+		return nil, err
+	}
+
+	return clientcmd.RESTConfigFromKubeConfig(secret.Data["value"])
 }
 
 func (m *Manager) GetKubeConfig(cluster *v1.Cluster, status v1.ClusterStatus) (*corev1.Secret, error) {

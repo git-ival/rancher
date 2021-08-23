@@ -6,9 +6,10 @@ import (
 
 	rkev1 "github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1"
 	"github.com/rancher/rancher/pkg/systemtemplate"
+	capi "sigs.k8s.io/cluster-api/api/v1alpha4"
 )
 
-func (p *Planner) loadClusterAgent(controlPlane *rkev1.RKEControlPlane) ([]byte, error) {
+func (p *Planner) loadClusterAgent(controlPlane *rkev1.RKEControlPlane, machine *capi.Machine) ([]byte, error) {
 	if controlPlane.Spec.ManagementClusterName == "local" {
 		return nil, nil
 	}
@@ -31,5 +32,10 @@ func (p *Planner) loadClusterAgent(controlPlane *rkev1.RKEControlPlane) ([]byte,
 		return nil, err
 	}
 
-	return systemtemplate.ForCluster(mgmtCluster, tokens[0].Status.Token)
+	taints, err := getTaints(machine, GetRuntime(controlPlane.Spec.KubernetesVersion))
+	if err != nil {
+		return nil, err
+	}
+
+	return systemtemplate.ForCluster(mgmtCluster, tokens[0].Status.Token, taints)
 }

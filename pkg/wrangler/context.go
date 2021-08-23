@@ -49,6 +49,7 @@ import (
 	appsv1 "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
 	"github.com/rancher/wrangler/pkg/generated/controllers/batch"
 	batchv1 "github.com/rancher/wrangler/pkg/generated/controllers/batch/v1"
+	"github.com/rancher/wrangler/pkg/generated/controllers/rbac"
 	"github.com/rancher/wrangler/pkg/generic"
 	"github.com/rancher/wrangler/pkg/leader"
 	"github.com/rancher/wrangler/pkg/schemes"
@@ -209,7 +210,17 @@ func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restCo
 		return nil, err
 	}
 
+	ctlg, err := catalog.NewFactoryFromConfigWithOptions(restConfig, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	apps, err := apps.NewFactoryFromConfigWithOptions(restConfig, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	rbac, err := rbac.NewFactoryFromConfigWithOptions(restConfig, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +280,7 @@ func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restCo
 
 	helmop := helmop.NewOperations(cg,
 		helm.Catalog().V1(),
+		rbac.Rbac().V1(),
 		content,
 		steveControllers.Core.Pod())
 
@@ -279,7 +291,8 @@ func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restCo
 		RESTMapper:      restMapper,
 	}
 
-	systemCharts, err := system.NewManager(ctx, restClientGetter, content, helmop, steveControllers.Core.Pod())
+	systemCharts, err := system.NewManager(ctx, restClientGetter, content, helmop, steveControllers.Core.Pod(),
+		mgmt.Management().V3().Setting(), ctlg.Catalog().V1().ClusterRepo())
 	if err != nil {
 		return nil, err
 	}
@@ -321,6 +334,7 @@ func NewContext(ctx context.Context, clientConfig clientcmd.ClientConfig, restCo
 		CachedDiscovery:         cache,
 		RESTMapper:              restMapper,
 		leadership:              leadership,
+		PeerManager:             peerManager,
 		RESTClientGetter:        restClientGetter,
 		CatalogContentManager:   content,
 		HelmOperations:          helmop,

@@ -6,13 +6,22 @@ import (
 
 	rkev1 "github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1"
 	"github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1/plan"
+	"github.com/rancher/rancher/pkg/controllers/provisioningv2/rke2/machineprovision"
 	corecontrollers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/pkg/kv"
 )
 
 type s3Args struct {
 	prefix      string
 	secretCache corecontrollers.SecretCache
 	env         bool
+}
+
+func first(one, two string) string {
+	if one == "" {
+		return two
+	}
+	return one
 }
 
 func (s *s3Args) ToArgs(s3 *rkev1.ETCDSnapshotS3, controlPlane *rkev1.RKEControlPlane) (args []string, env []string, files []plan.File, err error) {
@@ -25,18 +34,19 @@ func (s *s3Args) ToArgs(s3 *rkev1.ETCDSnapshotS3, controlPlane *rkev1.RKEControl
 	)
 
 	args = append(args,
-		fmt.Sprintf("--%ss3", s.prefix),
-		fmt.Sprintf("--%ss3-bucket=%s", s.prefix, s3.Bucket))
+		fmt.Sprintf("--%ss3", s.prefix))
 
 	credName := s3.CloudCredentialName
 	if credName == "" && controlPlane.Spec.ETCD != nil && controlPlane.Spec.ETCD.S3 != nil {
 		credName = controlPlane.Spec.ETCD.S3.CloudCredentialName
 	}
 
-	s3Cred, err = getS3Credential(s.secretCache, controlPlane.Namespace, credName, s3.Region)
+	s3Cred, err = getS3Credential(s.secretCache, controlPlane.Namespace, credName)
 	if err != nil {
 		return
 	}
+
+	args = append(args, fmt.Sprintf("--%ss3-bucket=%s", s.prefix, first(s3.Bucket, s3Cred.Bucket)))
 
 	if s3Cred.AccessKey != "" {
 		args = append(args, fmt.Sprintf("--%ss3-access-key=%s", s.prefix, s3Cred.AccessKey))
@@ -48,22 +58,22 @@ func (s *s3Args) ToArgs(s3 *rkev1.ETCDSnapshotS3, controlPlane *rkev1.RKEControl
 			args = append(args, fmt.Sprintf("--%ss3-secret-key=%s", s.prefix, s3Cred.SecretKey))
 		}
 	}
-	if s3Cred.Region != "" {
-		args = append(args, fmt.Sprintf("--%ss3-region=%s", s.prefix, s3Cred.Region))
+	if v := first(s3.Region, s3Cred.Region); v != "" {
+		args = append(args, fmt.Sprintf("--%ss3-region=%s", s.prefix, v))
 	}
-	if s3.Folder != "" {
-		args = append(args, fmt.Sprintf("--%ss3-folder=%s", s.prefix, s3.Folder))
+	if v := first(s3.Folder, s3Cred.Folder); v != "" {
+		args = append(args, fmt.Sprintf("--%ss3-folder=%s", s.prefix, v))
 	}
-	if s3.Endpoint != "" {
-		args = append(args, fmt.Sprintf("--%ss3-endpoint=%s", s.prefix, s3.Endpoint))
+	if v := first(s3.Endpoint, s3Cred.Endpoint); v != "" {
+		args = append(args, fmt.Sprintf("--%ss3-endpoint=%s", s.prefix, v))
 	}
-	if s3.SkipSSLVerify {
+	if s3.SkipSSLVerify || s3Cred.SkipSSLVerify {
 		args = append(args, fmt.Sprintf("--%ss3-skip-ssl-verify", s.prefix))
 	}
-	if s3.EndpointCA != "" {
+	if v := first(s3.EndpointCA, s3Cred.EndpointCA); v != "" {
 		filePath := configFile(controlPlane, "s3-endpoint-ca.crt")
 		files = append(files, plan.File{
-			Content: base64.StdEncoding.EncodeToString([]byte(s3.EndpointCA)),
+			Content: base64.StdEncoding.EncodeToString([]byte(v)),
 			Path:    filePath,
 		})
 		args = append(args, fmt.Sprintf("--%ss3-endpoint-ca=%s", s.prefix, filePath))
@@ -73,31 +83,40 @@ func (s *s3Args) ToArgs(s3 *rkev1.ETCDSnapshotS3, controlPlane *rkev1.RKEControl
 }
 
 type s3Credential struct {
-	AccessKey string
-	SecretKey string
-	Region    string
+	AccessKey     string
+	SecretKey     string
+	Region        string
+	Endpoint      string
+	EndpointCA    string
+	SkipSSLVerify bool
+	Bucket        string
+	Folder        string
 }
 
-func getS3Credential(secretCache corecontrollers.SecretCache, namespace, name, region string) (result s3Credential, _ error) {
+func getS3Credential(secretCache corecontrollers.SecretCache, namespace, name string) (result s3Credential, _ error) {
 	if name == "" {
-		result.Region = region
 		return result, nil
 	}
 
-	secret, err := secretCache.Get(namespace, name)
+	secret, err := machineprovision.GetCloudCredentialSecret(secretCache, namespace, name)
 	if err != nil {
 		return result, fmt.Errorf("failed to lookup etcdSnapshotCloudCredentialName: %w", err)
 	}
-	if secret.Type != "provisioning.cattle.io/cloud-credential" {
-		return result, fmt.Errorf("expected secret of type provisioning.cattle.io/cloud-credential, got [%s]", secret.Type)
+
+	data := map[string][]byte{}
+	for k, v := range secret.Data {
+		_, k = kv.RSplit(k, "-")
+		data[k] = v
 	}
 
-	if region == "" {
-		region = string(secret.Data["defaultRegion"])
-	}
 	return s3Credential{
-		AccessKey: string(secret.Data["accessKey"]),
-		SecretKey: string(secret.Data["secretKey"]),
-		Region:    region,
+		AccessKey:     string(data["accessKey"]),
+		SecretKey:     string(data["secretKey"]),
+		Region:        string(data["defaultRegion"]),
+		Endpoint:      string(data["defaultEndpoint"]),
+		EndpointCA:    string(data["defaultEndpointCA"]),
+		SkipSSLVerify: string(data["defaultSkipSSLVerify"]) == "true",
+		Bucket:        string(data["defaultBucket"]),
+		Folder:        string(data["defaultFolder"]),
 	}, nil
 }
