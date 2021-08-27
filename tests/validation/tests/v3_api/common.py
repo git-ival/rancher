@@ -65,7 +65,9 @@ env_file = os.path.join(
     os.path.dirname(os.path.realpath(__file__)),
     "rancher_env.config")
 
-RANCHER_VERSION_PATTERN = re.compile("([2-9]|\\d{3,})\\.([6-9]|\\d{3,})\\.([0-9]|\\d{3,})(-rc\\d{1,})?")
+RANCHER_VERSION_PATTERN = re.compile("([0-9]|\\d{3,})\\.([0-9]|\\d{3,})\\.([0-9]|\\d{3,})(-rc\\d{2,})?")
+RANCHER_PRIVILEGED_VERSION_PATTEN = re.compile("([2-9]|\\d{3,})\\.([5-9]|\\d{3,})\\.([0-9]|\\d{3,})(-rc\\d{2,})?")
+RANCHER_NEW_BOOTSTRAP_VERSION_PATTERN = re.compile("([2-9]|\\d{3,})\\.([6-9]|\\d{3,})\\.([0-9]|\\d{3,})(-rc\\d{2,})?")
 
 AWS_SSH_KEY_NAME = os.environ.get("AWS_SSH_KEY_NAME")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
