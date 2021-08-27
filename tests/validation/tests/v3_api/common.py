@@ -2097,13 +2097,13 @@ def set_url_password_token(rancher_url, server_url=None):
         'username': 'admin',
         'password': CATTLE_BOOTSTRAP_PASSWORD,
         'responseType': 'json',
-    }, verify=False, timeout=500, allow_redirects=False)
+    }, verify=False, timeout=500)
     print(r.json())
     token = r.json()['token']
     print(token)
     # Change admin password
     client = rancher.Client(url=rancher_url + "/v3",
-                            token=token, verify=False, allow_redirects=False)
+                            token=token, verify=False)
     admin_user = client.list_user(username="admin").data
     admin_user[0].setpassword(newPassword=ADMIN_PASSWORD)
 

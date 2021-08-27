@@ -59,9 +59,9 @@ def test_deploy_rancher_server():
         use_new_bootstrap = RANCHER_NEW_BOOTSTRAP_VERSION_PATTERN.search(RANCHER_SERVER_VERSION)
         if not use_new_bootstrap:
             RANCHER_SERVER_CMD = \
-            'sudo docker run -d --privileged --name="rancher-server" ' \
-            '--restart=unless-stopped -p 80:80 -p 443:443  ' \
-            'rancher/rancher'
+                'sudo docker run -d --privileged --name="rancher-server" ' \
+                '--restart=unless-stopped -p 80:80 -p 443:443  ' \
+                'rancher/rancher'
         else:
             RANCHER_SERVER_CMD = \
                 'sudo docker run -e CATTLE_BOOTSTRAP_PASSWORD=' + CATTLE_BOOTSTRAP_PASSWORD + \
