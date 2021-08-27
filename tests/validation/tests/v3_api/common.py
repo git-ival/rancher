@@ -19,6 +19,7 @@ from threading import Lock
 from threading import Thread
 import websocket
 import base64
+import re
 
 DEFAULT_CATALOG_TIMEOUT = 15
 DEFAULT_MONITORING_TIMEOUT = 180
@@ -33,6 +34,7 @@ CATTLE_AUTH_URL = \
 
 USER_PASSWORD = os.environ.get('USER_PASSWORD', "None")
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', "None")
+CATTLE_BOOTSTRAP_PASSWORD = os.environ.get('CATTLE_BOOTSTRAP_PASSWORD', "admin")
 
 kube_fname = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                           "k8s_kube_config")
@@ -62,6 +64,8 @@ RANCHER_CLEANUP_CLUSTER = \
 env_file = os.path.join(
     os.path.dirname(os.path.realpath(__file__)),
     "rancher_env.config")
+
+RANCHER_VERSION_PATTERN = re.compile("([2-9]|\\d{3,})\\.([6-9]|\\d{3,})\\.([0-9]|\\d{3,})(-rc\\d{1,})?")
 
 AWS_SSH_KEY_NAME = os.environ.get("AWS_SSH_KEY_NAME")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
@@ -2086,26 +2090,24 @@ def set_url_password_token(rancher_url, server_url=None):
     """Returns a ManagementContext for the default global admin user."""
     auth_url = \
         rancher_url + "/v3-public/localproviders/local?action=login"
+    print(auth_url)
     r = requests.post(auth_url, json={
         'username': 'admin',
-        'password': 'admin',
+        'password': CATTLE_BOOTSTRAP_PASSWORD,
         'responseType': 'json',
-    }, verify=False)
+    }, verify=False, timeout=500, allow_redirects=False)
     print(r.json())
     token = r.json()['token']
     print(token)
     # Change admin password
     client = rancher.Client(url=rancher_url + "/v3",
-                            token=token, verify=False)
+                            token=token, verify=False, allow_redirects=False)
     admin_user = client.list_user(username="admin").data
     admin_user[0].setpassword(newPassword=ADMIN_PASSWORD)
 
     # Set server-url settings
     serverurl = client.list_setting(name="server-url").data
-    if server_url:
-        client.update(serverurl[0], value=server_url)
-    else:
-        client.update(serverurl[0], value=rancher_url)
+    client.update(serverurl[0], value=rancher_url)
     return token
 
 

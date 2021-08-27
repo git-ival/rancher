@@ -44,25 +44,30 @@ def test_delete_keypair():
 
 
 def test_deploy_rancher_server():
-    if "v2.5" in  RANCHER_SERVER_VERSION or "master" in RANCHER_SERVER_VERSION:
+	# rancher 2.5: run start cmd > bootstrap with default "admin" password > maybe set new admin password? > rancher is done bootstrapping
+	# rancher 2.6: ... > bootstrap with randomly generated password OR user-specified > ...
+	# pytest -v -s -k "test_deploy_rancher_server"
+    aws_nodes = AmazonWebServices().create_multiple_nodes(
+        1, random_test_name("testsa" + HOST_NAME))
+    use_new_bootstrap = RANCHER_VERSION_PATTERN.search(RANCHER_SERVER_VERSION)
+    if not use_new_bootstrap:
         RANCHER_SERVER_CMD = \
             'sudo docker run -d --privileged --name="rancher-server" ' \
             '--restart=unless-stopped -p 80:80 -p 443:443  ' \
             'rancher/rancher'
     else:
         RANCHER_SERVER_CMD = \
-            'sudo docker run -d --name="rancher-server" ' \
+            'sudo docker run -e CATTLE_BOOTSTRAP_PASSWORD=' + CATTLE_BOOTSTRAP_PASSWORD + \
+			' -d --privileged --name="rancher-server" ' \
             '--restart=unless-stopped -p 80:80 -p 443:443  ' \
             'rancher/rancher'
     RANCHER_SERVER_CMD += ":" + RANCHER_SERVER_VERSION + " --trace"
     print(RANCHER_SERVER_CMD)
-    aws_nodes = AmazonWebServices().create_multiple_nodes(
-        1, random_test_name("testsa" + HOST_NAME))
     aws_nodes[0].execute_command(RANCHER_SERVER_CMD)
     time.sleep(120)
     RANCHER_SERVER_URL = "https://" + aws_nodes[0].public_ip_address
     print(RANCHER_SERVER_URL)
-    wait_until_active(RANCHER_SERVER_URL, timeout=300)
+    wait_until_active(RANCHER_SERVER_URL, timeout=500)
 
     RANCHER_SET_DEBUG_CMD = \
         "sudo docker exec rancher-server loglevel --set debug"

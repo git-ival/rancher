@@ -15,6 +15,7 @@ AWS_HOSTED_ZONE_ID - Zone Id in AWS route53 where route53 will be created.
 RANCHER_TEST_RBAC - To enable rbac tests
 """
 
+import logging
 from .common import (ApiError, CLUSTER_MEMBER, CLUSTER_OWNER, create_kubeconfig,
                      create_ns, create_project_and_ns,
                      get_cluster_client_for_token, get_project_client_for_token,
@@ -40,8 +41,18 @@ route_entry_53_2 = random_test_name('auto-ssc') + '.qa.rancher.space'
 
 
 def get_ssh_key(ssh_key_name):
+    # log = logging.getLogger(__name__)
     home = str(Path.home())
-    path = '{}/.ssh/{}'.format(home, ssh_key_name)
+    path = '{}/.ssh/aws{}'.format(home, ssh_key_name)
+
+    # def expandpath(path_pattern):
+    #     p = Path(path_pattern).expanduser()
+    #     parts = p.parts[p.is_absolute():]
+    #     return Path(p.root).glob(str(Path(*parts)))
+
+    # path = expandpath(prelim)
+    # print(str(path))
+    
     if os.path.exists(path):
         with open(path, 'r') as f:
             ssh_key = f.read()
