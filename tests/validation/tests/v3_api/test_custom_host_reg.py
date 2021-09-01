@@ -44,11 +44,9 @@ def test_delete_keypair():
 
 
 def test_deploy_rancher_server():
-	# rancher 2.5: run start cmd > bootstrap with default "admin" password > maybe set new admin password? > rancher is done bootstrapping
-	# rancher 2.6: ... > bootstrap with randomly generated password OR user-specified > ...
-	# pytest -v -s -k "test_deploy_rancher_server"
     aws_nodes = AmazonWebServices().create_multiple_nodes(
         1, random_test_name("testsa" + HOST_NAME))
+    sleep_time = 120
     needs_privileged = RANCHER_PRIVILEGED_VERSION_PATTEN.search(RANCHER_SERVER_VERSION)
     if not needs_privileged:
         RANCHER_SERVER_CMD = \
@@ -63,6 +61,7 @@ def test_deploy_rancher_server():
                 '--restart=unless-stopped -p 80:80 -p 443:443  ' \
                 'rancher/rancher'
         else:
+            sleep_time = 500
             RANCHER_SERVER_CMD = \
                 'sudo docker run -e CATTLE_BOOTSTRAP_PASSWORD=' + CATTLE_BOOTSTRAP_PASSWORD + \
                 ' -d --privileged --name="rancher-server" ' \
@@ -71,11 +70,13 @@ def test_deploy_rancher_server():
 
     RANCHER_SERVER_CMD += ":" + RANCHER_SERVER_VERSION + " --trace"
     print(RANCHER_SERVER_CMD)
+    time.sleep(500)
     aws_nodes[0].execute_command(RANCHER_SERVER_CMD)
-    time.sleep(120)
+    # time.sleep(sleep_time)
     RANCHER_SERVER_URL = "https://" + aws_nodes[0].public_ip_address
+    wait_until_ok(RANCHER_SERVER_URL, timeout=sleep_time)
     print(RANCHER_SERVER_URL)
-    wait_until_active(RANCHER_SERVER_URL, timeout=500)
+    wait_until_active(RANCHER_SERVER_URL, timeout=sleep_time)
 
     RANCHER_SET_DEBUG_CMD = \
         "sudo docker exec rancher-server loglevel --set debug"
@@ -83,7 +84,7 @@ def test_deploy_rancher_server():
 
     token = set_url_password_token(RANCHER_SERVER_URL)
     admin_client = rancher.Client(url=RANCHER_SERVER_URL + "/v3",
-                                  token=token, verify=False)
+                                  token=token, verify=False, timeout=sleep_time)
     if AUTH_PROVIDER:
         enable_url = \
             RANCHER_SERVER_URL + "/v3/" + AUTH_PROVIDER + \
@@ -139,7 +140,7 @@ def test_deploy_rancher_server():
         node_roles = [["controlplane"], ["etcd"],
                       ["worker"], ["worker"], ["worker"]]
         client = rancher.Client(url=RANCHER_SERVER_URL + "/v3",
-                                token=user_token, verify=False)
+                                token=user_token, verify=False, timeout=sleep_time)
         if K8S_VERSION != "":
             rke_config["kubernetesVersion"] = K8S_VERSION
         print("the rke config for creating the cluster:")
